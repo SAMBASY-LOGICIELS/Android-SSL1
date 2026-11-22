@@ -163,6 +163,10 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                     <i class="fa-solid fa-school-flag w-5 text-center"></i>
                     <span>10. Essai CODEC</span>
                 </button>
+                <button onclick="switchTab('transfert')" id="nav-transfert" class="nav-btn w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors hover:bg-slate-800 hover:text-white">
+                    <i class="fa-solid fa-arrows-rotate w-5 text-center"></i>
+                    <span>11. Transfert Tél ⇄ PC</span>
+                </button>
             </nav>
             <div class="p-4 border-t border-slate-800 text-xs text-slate-500 text-center">
                 Système Scolaire Sénégalais v3.0
@@ -195,6 +199,12 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
             <!-- ESSAIS -->
             <section id="tab-essai-ecole" class="tab-content hidden max-w-7xl mx-auto space-y-4"><div id="es-ecole"></div></section>
             <section id="tab-essai-codec" class="tab-content hidden max-w-7xl mx-auto space-y-4"><div id="es-codec"></div></section>
+            <!-- TRANSFERT TÉLÉPHONE ⇄ PC -->
+            <section id="tab-transfert" class="tab-content hidden max-w-4xl mx-auto space-y-4">
+                <div class="border-b pb-3 no-print"><h2 class="text-2xl font-bold text-slate-900">Transfert Téléphone ⇄ PC</h2>
+                    <p class="text-sm text-slate-500">Envoyez vos dernières données d'un appareil à l'autre, sans Internet. Les deux appareils sont fusionnés : rien n'est perdu.</p></div>
+                <div id="tr-body" class="space-y-3 no-print"></div>
+            </section>
 
             <!-- SECTION 1: PARAMETRES -->
             <section id="tab-params" class="tab-content hidden max-w-5xl mx-auto space-y-6">
@@ -3665,7 +3675,7 @@ const G=[
 {id:'essais',ic:'🧪',t:'Essais',col:'#e11d48',d:'Essai École et Essai CODEC',items:[['essai-ecole','Essai École'],['essai-codec','Essai CODEC']]},
 {id:'fin',ic:'💰',t:'Finance',col:'#f59e0b',d:'Inscriptions, mensualités, rappels, caisse',direct:'finance',items:[['finance','Gestion financière']]},
 {id:'abs',ic:'🕒',t:'Absences',col:'#0d9488',d:'Élèves et enseignants',items:[['absences:e','Retards et absences'],['absences:t','Absences des enseignants']]},
-{id:'out',ic:'🧰',t:'Outils administratifs',col:'#475569',d:'Affichages, rapports, PV, fiches, registres',direct:'outils',items:[['outils','Outils administratifs']]}];
+{id:'out',ic:'🧰',t:'Outils administratifs',col:'#475569',d:'Affichages, rapports, PV, fiches, registres',direct:'outils',items:[['outils','Outils administratifs']]},{id:'transfert',ic:'🔄',t:'Transfert Tél ⇄ PC',col:'#2563eb',d:'Envoyer ou recevoir vos données entre téléphone et PC',direct:'transfert',items:[['transfert','Transfert Tél ⇄ PC']]}];
 let cur='accueil',sub='e',openG=null;
 const grpOf=t=>G.find(g=>g.items.some(i=>i[0].split(':')[0]===t));
 function badge(id){try{if(id==='fin')return appState.eleves.filter(e=>{const t=tarif(e.classe,typeEl(e.id));return t.insc>0&&paid(e.id,'insc')<t.insc}).length;
@@ -3825,6 +3835,318 @@ window.qhPrint=function(){
 };
 const _or=window.outRender;window.outRender=function(){_or();if(QC==='quantum'||QC==='quantumt')panel()};
 })();
+</script>
+<script>
+/* === TRANSFERT TÉLÉPHONE ⇄ PC (hors ligne, fusion intelligente) === */
+(function(){
+'use strict';
+const E=id=>document.getElementById(id);
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){return false}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
+const H=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const BAD={'__proto__':1,'constructor':1,'prototype':1};
+const KS='senegal_school_app_state',KM='ssl_sync_meta',KU='ssl_undo',KL='ssl_transfer_log',KR='ssl_transfer_report';
+const MAXD=3;
+
+/* ---- appareil ---- */
+const cap=window.Capacitor,native=!!(cap&&cap.isNativePlatform&&cap.isNativePlatform());
+const isPhone=native||/Android|iPhone|iPad|Mobile/i.test((navigator&&navigator.userAgent)||'');
+const DEV=isPhone?'Téléphone':'PC';
+let did=LS.get('ssl_device_id');if(!did){did=Math.random().toString(36).slice(2,10)+Date.now().toString(36);LS.set('ssl_device_id',did)}
+
+/* ---- outils ---- */
+function sstr(v){
+  if(v===undefined||typeof v==='function')return 'null';
+  if(v===null||typeof v!=='object')return JSON.stringify(v);
+  if(Array.isArray(v))return '['+v.map(sstr).join(',')+']';
+  return '{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+sstr(v[k])).join(',')+'}';
+}
+function fnv(s){let h=0x811c9dc5;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,0x01000193)}return (h>>>0).toString(16).padStart(8,'0')}
+const strip=()=>Object.assign({},appState,{isUnlocked:false});
+const clone=v=>v===undefined?undefined:JSON.parse(JSON.stringify(v));
+const fmt=t=>{if(!t)return '—';try{return new Date(t).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return '—'}};
+
+/* ---- découpage de l'état en "unités" (élève, paiement, note…) ---- */
+const ID_P=[/^eleves$/,/^enseignants$/,/^fin\/(paiements|rubriques|depenses)$/,/^essais\/[^/]+\/list$/];
+const isIdPath=parts=>ID_P.some(r=>r.test(parts.map(p=>p.slice(2)).join('/')));
+const K=parts=>JSON.stringify(parts);
+function units(st){
+  const U=new Map();
+  const walk=(parts,v)=>{
+    if(v===undefined)return;
+    if(Array.isArray(v)&&isIdPath(parts)){
+      v.forEach(x=>{if(x&&typeof x==='object'&&x.id!=null)U.set(K(parts.concat('i:'+x.id)),x)});return;
+    }
+    if(v&&typeof v==='object'&&!Array.isArray(v)&&parts.length<MAXD){
+      Object.keys(v).forEach(k=>walk(parts.concat('k:'+k),v[k]));return;
+    }
+    U.set(K(parts),v);
+  };
+  Object.keys(st||{}).forEach(k=>{if(k!=='isUnlocked')walk(['k:'+k],st[k])});
+  return U;
+}
+function setUnit(st,parts,val){
+  let o=st;
+  for(let i=0;i<parts.length-1;i++){
+    const k=parts[i].slice(2);if(BAD[k])return;
+    if(o[k]===undefined||o[k]===null||typeof o[k]!=='object')o[k]=(parts[i+1][0]==='i')?[]:{};
+    o=o[k];
+  }
+  const last=parts[parts.length-1],k=last.slice(2);
+  if(last[0]==='i'){
+    if(!Array.isArray(o))return;
+    const idx=o.findIndex(x=>x&&String(x.id)===k);
+    if(val===undefined){if(idx>=0)o.splice(idx,1)}else if(idx>=0)o[idx]=val;else o.push(val);
+  }else{
+    if(BAD[k])return;
+    if(val===undefined)delete o[k];else o[k]=val;
+  }
+}
+const DEL_MAPS={notes:1,photos:1,passageExtra:1,detenteurs:1,wordDocs:1,abs:1};
+const delOK=parts=>parts[parts.length-1][0]==='i'||parts.length>=3||(parts.length===2&&DEL_MAPS[parts[0].slice(2)]);
+
+/* ---- suivi des modifications (horodatage par unité) ---- */
+function readMeta(){try{const m=JSON.parse(LS.get(KM)||'null');if(m&&m.u)return m}catch(e){}return{init:false,u:{}}}
+let warnedQuota=false;
+function refresh(){
+  const M=readMeta(),now=Date.now(),first=!M.init,seen=new Set();
+  units(appState).forEach((v,k)=>{
+    seen.add(k);const h=fnv(sstr(v)),m=M.u[k];
+    if(!m)M.u[k]=[h,first?0:now];else if(m[0]!==h){m[0]=h;m[1]=now}
+  });
+  Object.keys(M.u).forEach(k=>{
+    if(seen.has(k))return;const m=M.u[k];
+    if(m[0]!==null){m[0]=null;m[1]=now}else if(now-m[1]>180*864e5)delete M.u[k];
+  });
+  M.init=true;
+  if(!LS.set(KM,JSON.stringify(M))&&!warnedQuota){warnedQuota=true;console.warn('Transfert : stockage plein, suivi des modifications impossible')}
+  return M;
+}
+const maxT=u=>{let t=0;Object.keys(u).forEach(k=>{const m=u[k];if(m&&m[0]!==null&&m[1]>t)t=m[1]});return t};
+
+/* ---- fusion ---- */
+const LABEL={eleves:'élèves',enseignants:'enseignants',notes:'notes',fin:'finances',params:'paramètres',abs:'absences',photos:'photos',essais:'essais',media:'logo / cachet',subjects:'matières',posit:'test de positionnement'};
+const lab=t=>LABEL[t]||'autres données';
+const bump=(o,k)=>{o[k]=(o[k]||0)+1};
+function plan(rs,rmRaw,tie){
+  const LU=units(appState),LM=readMeta().u;
+  const RU=units(rs),RM=(rmRaw&&typeof rmRaw==='object')?rmRaw:{};
+  const keys=new Set([...LU.keys(),...RU.keys(),...Object.keys(LM),...Object.keys(RM)]);
+  const out=clone(strip()),meta={},S={add:{},upd:{},del:{},conf:0,ties:0,same:0};
+  const tOf=(v,m,h)=>v!==undefined?((m&&m[0]===h&&typeof m[1]==='number')?m[1]:0):((m&&m[0]===null&&typeof m[1]==='number')?m[1]:-1);
+  keys.forEach(key=>{
+    const parts=JSON.parse(key),top=parts[0].slice(2);
+    const lv=LU.get(key),rv=RU.get(key);
+    const lh=lv===undefined?null:fnv(sstr(lv)),rh=rv===undefined?null:fnv(sstr(rv));
+    const lt=tOf(lv,LM[key],lh),rt=tOf(rv,RM[key],rh);
+    if(lv===undefined&&rv===undefined){const t=Math.max(lt,rt);if(t>=0)meta[key]=[null,t];return}
+    if(lh===rh){meta[key]=[lh,Math.max(lt,rt,0)];S.same++;return}
+    if(key==='["k:essaiArch"]'&&Array.isArray(lv)&&Array.isArray(rv)){
+      const seen=new Set(),u=[];lv.concat(rv).forEach(x=>{const s=sstr(x);if(!seen.has(s)){seen.add(s);u.push(x)}});
+      setUnit(out,parts,clone(u));meta[key]=[fnv(sstr(u)),Date.now()];bump(S.upd,top);return;
+    }
+    let take=rt>lt?'r':(lt>rt?'l':null);
+    if(take===null){S.ties++;take=(tie==='remote')?'r':'l'}
+    else if(lt>0&&rt>0&&lv!==undefined&&rv!==undefined)S.conf++;
+    if(take==='r'&&rv===undefined&&!delOK(parts)){meta[key]=[lh,Math.max(lt,rt)+1];return}
+    if(take==='r'){
+      setUnit(out,parts,clone(rv));meta[key]=[rh,Math.max(rt,0)];
+      bump(lv===undefined?S.add:(rv===undefined?S.del:S.upd),top);
+    }else meta[key]=[lh,Math.max(lt,0)];
+  });
+  return {out,meta,S};
+}
+function planReplace(rs,rmRaw){
+  const out=clone(rs);out.isUnlocked=false;
+  const RM=(rmRaw&&typeof rmRaw==='object')?rmRaw:{},meta={};
+  units(out).forEach((v,k)=>{const h=fnv(sstr(v)),m=RM[k];meta[k]=[h,(m&&m[0]===h&&typeof m[1]==='number')?m[1]:0]});
+  Object.keys(RM).forEach(k=>{if(!meta[k]&&RM[k]&&RM[k][0]===null)meta[k]=[null,RM[k][1]||0]});
+  return {out,meta,S:{add:{},upd:{},del:{},conf:0,ties:0,same:0}};
+}
+function describe(S){
+  const tops=new Set([...Object.keys(S.add),...Object.keys(S.upd),...Object.keys(S.del)]),L={};
+  tops.forEach(t=>{const l=lab(t),o=L[l]=L[l]||{a:0,u:0,d:0};o.a+=S.add[t]||0;o.u+=S.upd[t]||0;o.d+=S.del[t]||0});
+  return Object.keys(L).map(l=>{const o=L[l],p=[];if(o.a)p.push('+'+o.a+' ajouté(s)');if(o.u)p.push(o.u+' mis à jour');if(o.d)p.push(o.d+' supprimé(s)');return l+' : '+p.join(', ')});
+}
+
+/* ---- identité protégée par le code administrateur ---- */
+async function guardIdentity(p){
+  const IDK=['ia','ief','nomEcole','anneeScolaire'],lp=appState.params||{},op=(p.out.params=p.out.params||{});
+  const ch=IDK.filter(k=>sstr(lp[k])!==sstr(op[k]));
+  if(!ch.length||appState.isUnlocked)return 0;
+  const ok=typeof window.sslAsk==='function'?await window.sslAsk("Ce transfert modifie l'identité de l'école (IA, IEF, nom, année). Code administrateur requis :",'adm'):false;
+  if(ok)return 0;
+  const LM=readMeta().u;
+  ch.forEach(k=>{
+    if(lp[k]===undefined)delete op[k];else op[k]=lp[k];
+    const key=K(['k:params','k:'+k]);if(LM[key])p.meta[key]=LM[key];else delete p.meta[key];
+  });
+  return ch.length;
+}
+
+/* ---- journal ---- */
+function log(k,m){let a=[];try{a=JSON.parse(LS.get(KL)||'[]')}catch(e){}a.unshift({t:Date.now(),k,d:DEV,m:m||''});LS.set(KL,JSON.stringify(a.slice(0,15)))}
+
+/* ---- envoi ---- */
+const slug=t=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,24);
+function exportTransfer(){
+  try{
+    const M=refresh(),st=JSON.stringify(strip()),p=appState.params||{},d=new Date();
+    const hdr={ssl:1,type:'transfert',appareil:DEV,deviceId:did,ecole:p.nomEcole||'',annee:p.anneeScolaire||'',date:d.toISOString(),sum:fnv(st)};
+    const txt=JSON.stringify(hdr).slice(0,-1)+',"meta":'+JSON.stringify(M.u)+',"state":'+st+'}';
+    const pad=n=>String(n).padStart(2,'0');
+    const name='TRANSFERT_'+(slug(p.nomEcole)||'ECOLE')+'_depuis_'+(isPhone?'TELEPHONE':'PC')+'_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes())+'.json';
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'application/json'}));a.download=name;a.click();URL.revokeObjectURL(a.href);
+    LS.set('ssl_last_send',String(Date.now()));LS.set('ssl_last_backup',String(Date.now()));
+    const b=E('bk-banner');if(b)b.remove();
+    log('envoi','Fichier créé : '+name);
+    toast(isPhone?'Fichier prêt : choisissez où l\'envoyer (WhatsApp, Bluetooth, Drive…).':'Fichier enregistré (dossier Téléchargements). Copiez-le sur l\'autre appareil.');
+    if(E('tr-body'))trRender();
+  }catch(e){alert('Impossible de préparer le fichier : '+(e&&e.message||e))}
+}
+
+/* ---- réception ---- */
+function onFile(inp){
+  const f=inp.files&&inp.files[0];inp.value='';if(!f)return;
+  const r=new FileReader();
+  r.onerror=()=>alert('Lecture du fichier impossible.');
+  r.onload=()=>{
+    let d;try{d=JSON.parse(r.result)}catch(e){return alert('Fichier illisible ou incomplet. Renvoyez-le depuis l\'autre appareil.')}
+    let st,meta,env;
+    if(d&&d.ssl&&d.state){
+      st=d.state;meta=d.meta||{};env=d;
+      if(d.sum&&fnv(JSON.stringify(st))!==d.sum&&!confirm('Ce fichier semble endommagé. Continuer quand même ?'))return;
+    }else if(d&&d.params&&Array.isArray(d.eleves)){
+      st=d;meta={};env={appareil:'Sauvegarde',date:d.timestamp||null,ecole:d.params.nomEcole,deviceId:null};
+    }
+    if(!st||!st.params||!Array.isArray(st.eleves))return alert('Ce fichier n\'est pas un fichier de transfert de cette application.');
+    openReceive(env,st,meta);
+  };
+  r.readAsText(f);
+}
+function counts(st,u){
+  let n=0;units(st).forEach((v,k)=>{if(k.indexOf('["k:notes"')===0)n++});
+  const f=st.fin||{};
+  return {el:(st.eleves||[]).length,en:(st.enseignants||[]).length,no:n,pa:(f.paiements||[]).length};
+}
+function closeModal(){const m=E('tr-modal');if(m)m.remove()}
+function openReceive(env,st,meta){
+  refresh();
+  const LM=readMeta().u,lMax=maxT(LM),rMax=maxT(meta||{}),rDate=rMax||(env.date?Date.parse(env.date):0);
+  const lc=counts(appState),rc=counts(st);
+  const other=env.deviceId&&env.deviceId===did;
+  const lp=appState.params||{},sameSchool=!env.ecole||!lp.nomEcole||slug(env.ecole)===slug(lp.nomEcole);
+  const dry=plan(st,meta,'local');
+  const recommend=(lMax===0&&rDate>0)?'replace':'merge';
+  const tieDef=(rMax>=lMax)?'remote':'local';
+  const col=(t,c,d)=>'<div class="flex-1 min-w-[140px] border rounded-lg p-2 bg-slate-50"><div class="font-bold text-xs mb-1">'+t+'</div><div class="text-xs space-y-0.5"><div>👨‍🎓 '+c.el+' élèves</div><div>👩‍🏫 '+c.en+' enseignants</div><div>📝 '+c.no+' lignes de notes</div><div>💰 '+c.pa+' paiements</div><div class="text-slate-500">Dernière modif. : '+fmt(d)+'</div></div></div>';
+  let h='<div class="card" style="max-width:520px;width:100%;max-height:92vh;overflow:auto"><h3 class="font-bold text-lg mb-1">Recevoir les données</h3>';
+  h+='<p class="text-xs text-slate-500 mb-2">Fichier envoyé par : <b>'+H(env.appareil||'?')+'</b>'+(env.date?' le '+fmt(Date.parse(env.date)):'')+'</p>';
+  if(!sameSchool)h+='<div class="text-xs bg-red-50 border border-red-300 text-red-800 rounded p-2 mb-2">⚠️ Ce fichier vient d\'une autre école : « '+H(env.ecole)+' ». Vérifiez avant de continuer.</div>';
+  if(other)h+='<div class="text-xs bg-amber-50 border border-amber-300 text-amber-800 rounded p-2 mb-2">⚠️ Ce fichier a été créé par cet appareil lui-même.</div>';
+  h+='<div class="flex gap-2 mb-3 flex-wrap">'+col('📦 Fichier reçu',rc,rDate)+col('📍 Cet appareil ('+DEV+')',lc,lMax)+'</div>';
+  h+='<div class="border rounded-lg p-3 mb-2 '+(recommend==='merge'?'border-emerald-500 bg-emerald-50':'')+'"><div class="font-bold text-sm">🔀 Fusionner '+(recommend==='merge'?'<span class="text-emerald-700 text-xs">(recommandé)</span>':'')+'</div><p class="text-xs text-slate-600">Garde le plus récent de chaque élève, note, paiement… Les deux côtés sont conservés. En cas de modification des deux côtés, la version la plus récente gagne.</p><div id="tr-prev" class="text-xs mt-1"></div><div id="tr-tie"></div><button class="btn g mt-2" id="tr-do-merge">Fusionner maintenant</button></div>';
+  h+='<div class="border rounded-lg p-3 mb-2 '+(recommend==='replace'?'border-emerald-500 bg-emerald-50':'')+'"><div class="font-bold text-sm">♻️ Remplacer '+(recommend==='replace'?'<span class="text-emerald-700 text-xs">(recommandé : cet appareil est neuf)</span>':'')+'</div><p class="text-xs text-slate-600">Cet appareil devient une copie exacte du fichier reçu (idéal pour un appareil neuf ou à jour par rapport à l\'autre). Vos données locales seront écrasées.</p><button class="btn a mt-2" id="tr-do-rep">Remplacer par le fichier</button></div>';
+  h+='<p class="text-[11px] text-slate-500">Une copie de secours est gardée : vous pourrez annuler le transfert.</p><div class="text-right mt-2"><button class="btn l" id="tr-cancel">Annuler</button></div></div>';
+  let m=E('tr-modal');if(m)m.remove();
+  document.body.insertAdjacentHTML('beforeend','<div id="tr-modal" class="no-print" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:10px">'+h+'</div>');
+  let tie=tieDef;
+  const upd=()=>{
+    const p=plan(st,meta,tie),S=p.S,tot=o=>Object.keys(o).reduce((a,k)=>a+o[k],0);
+    const lines=describe(S);
+    E('tr-prev').innerHTML=lines.length?('<b>Ce qui va changer ici :</b><br>'+lines.map(H).join('<br>')+(S.conf?'<br>⚡ '+S.conf+' modifié(s) des deux côtés : version la plus récente gardée.':'')):'✔ Aucune différence : cet appareil est déjà à jour.';
+    E('tr-tie').innerHTML=S.ties?('<div class="text-xs mt-2 bg-amber-50 border border-amber-300 rounded p-2"><b>'+S.ties+' élément(s) différents sans date de modification</b> (premier transfert). Quelle version garder ?<label class="block mt-1"><input type="radio" name="trtie" value="remote" '+(tie==='remote'?'checked':'')+'> Celle du fichier reçu</label><label class="block"><input type="radio" name="trtie" value="local" '+(tie==='local'?'checked':'')+'> Celle de cet appareil</label></div>'):'';
+    document.querySelectorAll('input[name=trtie]').forEach(i=>i.onchange=()=>{tie=i.value;upd()});
+  };
+  upd();
+  E('tr-cancel').onclick=closeModal;
+  E('tr-do-merge').onclick=()=>go('fusion',()=>plan(st,meta,tie),env);
+  E('tr-do-rep').onclick=()=>{if(confirm('Remplacer TOUTES les données de cet appareil par celles du fichier ?'))go('remplacement',()=>planReplace(st,meta),env)};
+}
+async function go(kind,mk,env){
+  closeModal();
+  refresh();
+  const p=mk(),kept=await guardIdentity(p);
+  const lines=describe(p.S);
+  const report={kind,from:env.appareil||'?',lines,conf:p.S.conf,kept,t:Date.now()};
+  const snap=JSON.stringify({t:Date.now(),state:strip(),meta:readMeta()});
+  if(!LS.set(KU,snap)&&!confirm('Impossible de garder une copie de secours (mémoire pleine). Continuer sans pouvoir annuler ?'))return;
+  const prev=appState;
+  appState=Object.assign(p.out,{isUnlocked:false});
+  if(!LS.set(KS,JSON.stringify(appState))){
+    LS.del(KU);
+    if(!LS.set(KS,JSON.stringify(appState))){appState=prev;return alert('Mémoire de l\'appareil pleine : transfert annulé, vos données n\'ont pas été modifiées.')}
+  }
+  LS.set(KM,JSON.stringify({init:true,u:p.meta}));
+  LS.set('ssl_last_recv',String(Date.now()));
+  log('reception',(kind==='fusion'?'Fusion':'Remplacement')+' avec les données de '+(env.appareil||'?'));
+  LS.set(KR,JSON.stringify(report));
+  location.reload();
+}
+function undo(){
+  let s;try{s=JSON.parse(LS.get(KU)||'null')}catch(e){}
+  if(!s||!s.state)return alert('Aucune copie de secours disponible.');
+  if(!confirm('Annuler le dernier transfert et revenir aux données du '+fmt(s.t)+' ?'))return;
+  if(!LS.set(KS,JSON.stringify(s.state)))return alert('Restauration impossible.');
+  LS.set(KM,JSON.stringify(s.meta||{init:false,u:{}}));
+  LS.del(KU);log('annulation','Retour aux données du '+fmt(s.t));
+  LS.set(KR,JSON.stringify({kind:'annulation',lines:['Données restaurées au '+fmt(s.t)],t:Date.now()}));
+  location.reload();
+}
+
+/* ---- interface ---- */
+function toast(m){
+  const o=E('tr-toast');if(o)o.remove();
+  document.body.insertAdjacentHTML('beforeend','<div id="tr-toast" class="no-print" style="position:fixed;left:10px;right:10px;bottom:14px;z-index:10002;background:#0f172a;color:#fff;border-radius:12px;padding:10px 14px;font-size:13px;box-shadow:0 4px 14px #0005">'+H(m)+'</div>');
+  setTimeout(()=>{const t=E('tr-toast');if(t)t.remove()},6000);
+}
+function trRender(){
+  const box=E('tr-body');if(!box)return;
+  const M=refresh(),c=counts(appState),lm=maxT(M.u);
+  let u=null;try{u=JSON.parse(LS.get(KU)||'null')}catch(e){}
+  let lg=[];try{lg=JSON.parse(LS.get(KL)||'[]')}catch(e){}
+  const ic={envoi:'📤',reception:'📥',annulation:'↩️'};
+  let h='<div class="card"><div class="flex items-center gap-3"><div class="text-3xl">'+(isPhone?'📱':'💻')+'</div><div><div class="font-bold">Cet appareil : '+DEV+'</div><div class="text-xs text-slate-500">'+c.el+' élèves · '+c.en+' enseignants · '+c.no+' lignes de notes · '+c.pa+' paiements</div><div class="text-xs text-slate-500">Dernière modification : '+fmt(lm)+'</div><div class="text-xs text-slate-500">Dernier envoi : '+fmt(+LS.get('ssl_last_send'))+' · Dernière réception : '+fmt(+LS.get('ssl_last_recv'))+'</div></div></div></div>';
+  h+='<div class="grid sm:grid-cols-2 gap-3"><div class="card space-y-2"><h3 class="font-bold text-emerald-700">📤 1. ENVOYER mes données</h3><p class="text-xs text-slate-600">Crée un fichier avec toutes vos dernières données. '+(isPhone?'Le menu de partage s\'ouvre : WhatsApp, Bluetooth, Drive, e-mail…':'Il est enregistré dans Téléchargements : copiez-le par clé USB, WhatsApp Web, e-mail…')+'</p><button class="btn g w-full justify-center" id="tr-send">Préparer le fichier</button></div>';
+  h+='<div class="card space-y-2"><h3 class="font-bold text-blue-700">📥 2. RECEVOIR depuis l\'autre appareil</h3><p class="text-xs text-slate-600">Choisissez le fichier reçu (commençant par <b>TRANSFERT_</b>). Les données sont fusionnées : rien n\'est perdu.</p><label class="btn w-full justify-center" style="background:#2563eb;cursor:pointer">Choisir le fichier<input type="file" id="tr-file" class="hidden" style="display:none"></label></div></div>';
+  h+='<div class="card text-xs text-slate-600 space-y-1"><h3 class="font-bold text-sm text-slate-800">Comment faire ?</h3><p><b>Téléphone → PC :</b> sur le téléphone, « Envoyer » → partagez le fichier (WhatsApp à vous-même, Bluetooth, Drive, câble USB) → sur le PC, « Recevoir » → choisissez le fichier → « Fusionner ».</p><p><b>PC → Téléphone :</b> même chose dans l\'autre sens.</p><p><b>Pour que les deux appareils soient identiques :</b> après la fusion, renvoyez le résultat à l\'autre appareil (bouton proposé à la fin).</p><p>Aucune connexion Internet n\'est nécessaire. Vérifiez que la date et l\'heure des deux appareils sont correctes.</p></div>';
+  if(u&&u.t)h+='<div class="card flex flex-wrap items-center gap-2 justify-between"><span class="text-xs">Copie de secours du '+fmt(u.t)+'</span><button class="btn r" id="tr-undo">↩️ Annuler le dernier transfert reçu</button></div>';
+  if(lg.length)h+='<div class="card"><h3 class="font-bold text-sm mb-1">Historique</h3><ul class="text-xs text-slate-600 space-y-0.5">'+lg.map(x=>'<li>'+(ic[x.k]||'•')+' '+fmt(x.t)+' — '+H(x.m)+'</li>').join('')+'</ul></div>';
+  box.innerHTML=h;
+  E('tr-send').onclick=exportTransfer;E('tr-file').onchange=function(){onFile(this)};
+  const ub=E('tr-undo');if(ub)ub.onclick=undo;
+}
+function showReport(){
+  let r=null;try{r=JSON.parse(LS.get(KR)||'null')}catch(e){}
+  if(!r)return;LS.del(KR);
+  const t=r.kind==='annulation'?'Transfert annulé':'Transfert terminé ✔';
+  let h='<div class="card" style="max-width:460px;width:100%"><h3 class="font-bold text-lg mb-1">'+t+'</h3>';
+  if(r.from)h+='<p class="text-xs text-slate-500 mb-2">'+(r.kind==='fusion'?'Fusion':'Remplacement')+' avec les données de : '+H(r.from)+'</p>';
+  h+=(r.lines&&r.lines.length?'<div class="text-sm space-y-0.5">'+r.lines.map(x=>'<div>• '+H(x)+'</div>').join('')+'</div>':'<p class="text-sm">Aucune différence : appareil déjà à jour.</p>');
+  if(r.conf)h+='<p class="text-xs mt-2 text-amber-700">⚡ '+r.conf+' élément(s) modifié(s) des deux côtés : la version la plus récente a été gardée.</p>';
+  if(r.kept)h+='<p class="text-xs mt-2 text-red-700">🔒 L\'identité de l\'école n\'a pas été modifiée (code administrateur non validé).</p>';
+  h+='<div class="flex flex-wrap gap-2 justify-end mt-3">'+(r.kind==='fusion'?'<button class="btn g" id="tr-back">📤 Renvoyer le résultat à l\'autre appareil</button>':'')+'<button class="btn l" id="tr-ok">Fermer</button></div></div>';
+  document.body.insertAdjacentHTML('beforeend','<div id="tr-modal" class="no-print" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:10px">'+h+'</div>');
+  E('tr-ok').onclick=closeModal;
+  const b=E('tr-back');if(b)b.onclick=()=>{closeModal();exportTransfer()};
+}
+
+/* ---- branchements ---- */
+const origSave=window.saveStateToStorage;
+let tmr=null;
+if(typeof origSave==='function'){
+  window.saveStateToStorage=function(){
+    const r=origSave.apply(this,arguments);
+    clearTimeout(tmr);tmr=setTimeout(()=>{try{refresh()}catch(e){}},1500);
+    return r;
+  };
+}
+const _sw=window.switchTab;
+window.switchTab=function(id){const r=_sw.apply(this,arguments);if(id==='transfert')trRender();return r};
+window.addEventListener('load',()=>setTimeout(()=>{try{refresh()}catch(e){}showReport()},400));
+document.addEventListener('visibilitychange',()=>{if(document.hidden){try{refresh()}catch(e){}}});
+window.sslTransfer={units,plan,planReplace,refresh,exportTransfer,sstr,fnv,readMeta};
+})();
+
 </script>
 </body>
 </html>
