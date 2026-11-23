@@ -3675,7 +3675,8 @@ const G=[
 {id:'essais',ic:'🧪',t:'Essais',col:'#e11d48',d:'Essai École et Essai CODEC',items:[['essai-ecole','Essai École'],['essai-codec','Essai CODEC']]},
 {id:'fin',ic:'💰',t:'Finance',col:'#f59e0b',d:'Inscriptions, mensualités, rappels, caisse',direct:'finance',items:[['finance','Gestion financière']]},
 {id:'abs',ic:'🕒',t:'Absences',col:'#0d9488',d:'Élèves et enseignants',items:[['absences:e','Retards et absences'],['absences:t','Absences des enseignants']]},
-{id:'out',ic:'🧰',t:'Outils administratifs',col:'#475569',d:'Affichages, rapports, PV, fiches, registres',direct:'outils',items:[['outils','Outils administratifs']]},{id:'transfert',ic:'🔄',t:'Transfert Tél ⇄ PC',col:'#2563eb',d:'Envoyer ou recevoir vos données entre téléphone et PC',direct:'transfert',items:[['transfert','Transfert Tél ⇄ PC']]}];
+{id:'out',ic:'🧰',t:'Outils administratifs',col:'#475569',d:'Affichages, rapports, PV, fiches, registres',direct:'outils',items:[['outils','Outils administratifs']]},
+{id:'transfert',ic:'🔄',t:'Transfert Tél ⇄ PC',col:'#2563eb',d:'Envoyer ou recevoir vos données entre téléphone et PC',direct:'transfert',items:[['transfert','Transfert Tél ⇄ PC']]}];
 let cur='accueil',sub='e',openG=null;
 const grpOf=t=>G.find(g=>g.items.some(i=>i[0].split(':')[0]===t));
 function badge(id){try{if(id==='fin')return appState.eleves.filter(e=>{const t=tarif(e.classe,typeEl(e.id));return t.insc>0&&paid(e.id,'insc')<t.insc}).length;
@@ -3973,6 +3974,7 @@ async function guardIdentity(p){
   const IDK=['ia','ief','nomEcole','anneeScolaire'],lp=appState.params||{},op=(p.out.params=p.out.params||{});
   const ch=IDK.filter(k=>sstr(lp[k])!==sstr(op[k]));
   if(!ch.length||appState.isUnlocked)return 0;
+  if(window.sslIdent&&await window.sslIdent.sealOk(op))return 0;
   const ok=typeof window.sslAsk==='function'?await window.sslAsk("Ce transfert modifie l'identité de l'école (IA, IEF, nom, année). Code administrateur requis :",'adm'):false;
   if(ok)return 0;
   const LM=readMeta().u;
@@ -4145,6 +4147,440 @@ window.switchTab=function(id){const r=_sw.apply(this,arguments);if(id==='transfe
 window.addEventListener('load',()=>setTimeout(()=>{try{refresh()}catch(e){}showReport()},400));
 document.addEventListener('visibilitychange',()=>{if(document.hidden){try{refresh()}catch(e){}}});
 window.sslTransfer={units,plan,planReplace,refresh,exportTransfer,sstr,fnv,readMeta};
+})();
+
+</script>
+<script>
+/* ===== PDF SUR ANDROID : génération dans l'application puis partage (WhatsApp, Drive…) ===== */
+(function(){
+'use strict';
+const E=id=>document.getElementById(id);
+const cap=window.Capacitor,native=!!(cap&&cap.isNativePlatform&&cap.isNativePlatform());
+const MM=96/25.4;
+
+/* ---- CSS : les règles @media print deviennent des règles normales ---- */
+function collect(){
+  const css=[],pages=[],faces=[];
+  for(const sh of document.styleSheets){
+    let rules;try{rules=sh.cssRules}catch(e){continue}
+    const base=sh.href||document.baseURI;
+    const walk=rs=>{for(const r of rs){
+      if(r.type===5){faces.push({r,base});continue}
+      if(r.type===6){pages.push(r.cssText);continue}
+      if(r.type===3)continue;
+      if(r.type===4){const m=(r.media&&r.media.mediaText||'').toLowerCase();
+        if(/\bprint\b/.test(m)){walk(r.cssRules);continue}
+        if(/\bscreen\b/.test(m)&&!/\ball\b/.test(m))continue;
+      }
+      css.push(r.cssText);
+    }};
+    walk(rules);
+  }
+  return {css:css.join('\n'),pages:pages.join(' '),faces};
+}
+function pageCfg(pagesCss){
+  let land=false,mm=10;
+  const s=/size\s*:\s*([^;}]+)/i.exec(pagesCss||'');
+  if(s)land=/landscape/i.test(s[1]);
+  const m=/margin\s*:\s*([\d.]+)\s*mm/i.exec(pagesCss||'');
+  if(m)mm=parseFloat(m[1]);
+  const pw=(land?297:210)*MM,ph=(land?210:297)*MM,mg=mm*MM;
+  return {land,pw,ph,mg,cw:Math.round(pw-2*mg),ch:Math.round(ph-2*mg)};
+}
+async function toDataUrl(url){
+  const r=await fetch(url);if(!r.ok)throw new Error('police');
+  const b=await r.blob();
+  return await new Promise((res,rej)=>{const f=new FileReader();f.onload=()=>res(f.result);f.onerror=rej;f.readAsDataURL(b)});
+}
+async function fontCss(faces,used){
+  const out=[],seen=new Set();
+  for(const f of faces){
+    try{
+      const st=f.r.style,fam=(st.getPropertyValue('font-family')||'').replace(/["']/g,'').trim();
+      if(!used.has(fam.toLowerCase()))continue;
+      const src=st.getPropertyValue('src')||'',m=/url\(\s*["']?([^"')]+)["']?\s*\)/.exec(src);
+      if(!m||/^data:/.test(m[1]))continue;
+      const abs=new URL(m[1],f.base).href;if(seen.has(abs+fam))continue;seen.add(abs+fam);
+      const d=await toDataUrl(abs);
+      out.push('@font-face{font-family:"'+fam+'";font-weight:'+(st.getPropertyValue('font-weight')||'400')+';font-style:'+(st.getPropertyValue('font-style')||'normal')+';src:url('+d+')}');
+    }catch(e){}
+  }
+  return out.join('\n');
+}
+
+/* ---- document hors écran à la largeur de la page ---- */
+function cloneBody(){
+  const c=document.body.cloneNode(true);
+  c.querySelectorAll('script,noscript,iframe,video,audio').forEach(n=>n.remove());
+  const o=document.body.querySelectorAll('input,textarea,select'),n=c.querySelectorAll('input,textarea,select');
+  o.forEach((el,i)=>{const t=n[i];if(!t)return;
+    if(el.tagName==='TEXTAREA')t.textContent=el.value;
+    else if(el.tagName==='SELECT'){[...t.options].forEach((op,k)=>{if(k===el.selectedIndex)op.setAttribute('selected','');else op.removeAttribute('selected')})}
+    else if(el.type==='checkbox'||el.type==='radio'){if(el.checked)t.setAttribute('checked','');else t.removeAttribute('checked')}
+    else t.setAttribute('value',el.value)});
+  return c;
+}
+function makeFrame(cfg,css,body){
+  return new Promise((res,rej)=>{
+    const fr=document.createElement('iframe');
+    fr.setAttribute('aria-hidden','true');
+    fr.style.cssText='position:fixed;left:-99999px;top:0;width:'+cfg.cw+'px;height:800px;border:0;visibility:hidden';
+    const links=[...document.querySelectorAll('link[rel=stylesheet]')].map(l=>'<link rel="stylesheet" href="'+l.href+'">').join('');
+    fr.srcdoc='<!doctype html><html class="'+(document.documentElement.className||'')+'"><head><meta charset="utf-8"><base href="'+document.baseURI+'">'+links+'<style>'+css+'</style></head><body class="'+(document.body.className||'')+'" style="margin:0">'+body.innerHTML+'</body></html>';
+    fr.onload=()=>res(fr);fr.onerror=()=>rej(new Error('cadre'));
+    document.body.appendChild(fr);
+  });
+}
+async function settle(doc){
+  try{await doc.fonts.ready}catch(e){}
+  const imgs=[...doc.images].filter(i=>!i.complete);
+  await Promise.all(imgs.map(i=>new Promise(r=>{i.onload=i.onerror=r;setTimeout(r,4000)})));
+  await new Promise(r=>setTimeout(r,150));
+}
+
+/* ---- découpage en pages ---- */
+function computeCuts(doc,cfg){
+  const w=doc.defaultView,body=doc.body,total=Math.ceil(Math.max(body.scrollHeight,doc.documentElement.scrollHeight));
+  const forced=new Set([0,total]),candSet=new Set(),boxes=[];
+  const FORCE=/always|page|left|right/;
+  body.querySelectorAll('*').forEach(el=>{
+    const cs=w.getComputedStyle(el);if(cs.display==='none')return;
+    const r=el.getBoundingClientRect();if(!r.height)return;
+    const top=Math.round(r.top+w.scrollY),bot=Math.round(r.bottom+w.scrollY),h=bot-top;
+    const bb=cs.breakBefore||cs.pageBreakBefore||'',ba=cs.breakAfter||cs.pageBreakAfter||'',bi=cs.breakInside||cs.pageBreakInside||'';
+    if(FORCE.test(bb)&&top>0)forced.add(top);
+    if(FORCE.test(ba)&&bot<total)forced.add(bot);
+    candSet.add(bot);
+    if(h>=3&&(h<=cfg.ch*0.6||(/avoid/.test(bi)&&h<=cfg.ch)))boxes.push([top,bot]);
+  });
+  const cand=[...candSet].sort((x,y)=>y-x);
+  const crossed=y=>{for(const [t,bt] of boxes){if(t<y-1&&bt>y+1)return true}return false};
+  const fs=[...forced].sort((x,y)=>x-y),slices=[];
+  for(let i=0;i<fs.length-1;i++){
+    let a=fs[i];const b=fs[i+1];if(b-a<3)continue;
+    while(b-a>cfg.ch+2){
+      const lim=a+cfg.ch;let cut=0;
+      for(const c of cand){if(c>lim)continue;if(c<=a+cfg.ch*0.4)break;if(!crossed(c)){cut=c;break}}
+      if(!cut)cut=lim;
+      slices.push([a,cut]);a=cut;
+    }
+    slices.push([a,b]);
+  }
+  return {slices,total};
+}
+
+/* ---- rendu d'une tranche en JPEG ---- */
+function loadImg(url){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('rendu'));i.src=url})}
+async function sliceJpeg(xhtml,cfg,total,y0,y1,scale,q){
+  const h=Math.max(1,y1-y0);
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+cfg.cw+'" height="'+h+'"><foreignObject x="0" y="'+(-y0)+'" width="'+cfg.cw+'" height="'+total+'">'+xhtml+'</foreignObject></svg>';
+  const url='data:image/svg+xml;base64,'+b64(svg);
+  const img=await loadImg(url);
+  const cv=document.createElement('canvas');cv.width=Math.round(cfg.pw*scale);cv.height=Math.round(cfg.ph*scale);
+  const x=cv.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,cv.width,cv.height);
+  x.drawImage(img,cfg.mg*scale,cfg.mg*scale,cfg.cw*scale,h*scale);
+  const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',q));
+  if(!blob)throw new Error('image');
+  const buf=new Uint8Array(await blob.arrayBuffer());
+  const o={jpeg:buf,w:cv.width,h:cv.height};cv.width=cv.height=0;return o;
+}
+function b64(str){
+  const u=new TextEncoder().encode(str);let s='';
+  for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));
+  return btoa(s);
+}
+
+/* ---- écriture du fichier PDF ---- */
+function writePdf(pages,cfg){
+  const enc=new TextEncoder(),parts=[],offs=[];let pos=0;
+  const push=x=>{const b=typeof x==='string'?enc.encode(x):x;parts.push(b);pos+=b.length};
+  const W=(cfg.pw*0.75).toFixed(2),Hh=(cfg.ph*0.75).toFixed(2);
+  push(new Uint8Array([0x25,0x50,0x44,0x46,0x2d,0x31,0x2e,0x34,0x0a,0x25,0xe2,0xe3,0xcf,0xd3,0x0a]));
+  const n=pages.length,obj=(id,body)=>{offs[id]=pos;push(id+' 0 obj\n');push(body);push('\nendobj\n')};
+  obj(1,'<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2,'<< /Type /Pages /Count '+n+' /Kids ['+pages.map((_,i)=>(3+i*3)+' 0 R').join(' ')+'] >>');
+  pages.forEach((p,i)=>{
+    const pid=3+i*3,cid=pid+1,iid=pid+2;
+    obj(pid,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+W+' '+Hh+'] /Resources << /XObject << /Im0 '+iid+' 0 R >> >> /Contents '+cid+' 0 R >>');
+    const c='q '+W+' 0 0 '+Hh+' 0 0 cm /Im0 Do Q';obj(cid,'<< /Length '+c.length+' >>\nstream\n'+c+'\nendstream');
+    offs[iid]=pos;push(iid+' 0 obj\n<< /Type /XObject /Subtype /Image /Width '+p.w+' /Height '+p.h+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+p.jpeg.length+' >>\nstream\n');push(p.jpeg);push('\nendstream\nendobj\n');
+  });
+  const xr=pos,tot=3+n*3;let x='xref\n0 '+tot+'\n0000000000 65535 f \n';
+  for(let i=1;i<tot;i++)x+=String(offs[i]).padStart(10,'0')+' 00000 n \n';
+  push(x+'trailer\n<< /Size '+tot+' /Root 1 0 R >>\nstartxref\n'+xr+'\n%%EOF');
+  return new Blob(parts,{type:'application/pdf'});
+}
+
+/* ---- point d'entrée ---- */
+async function buildPdf(onProgress){
+  const {css,pages,faces}=collect(),cfg=pageCfg(pages);
+  const body=cloneBody(),fr=await makeFrame(cfg,css,body);
+  try{
+    const doc=fr.contentDocument,w=fr.contentWindow;
+    await settle(doc);
+    const used=new Set();doc.body.querySelectorAll('*').forEach(el=>{const f=w.getComputedStyle(el).fontFamily;f.split(',').forEach(s=>used.add(s.replace(/["']/g,'').trim().toLowerCase()))});
+    const fcss=await fontCss(faces,used);
+    const {slices,total}=computeCuts(doc,cfg);
+    if(!slices.length)throw new Error('Rien à imprimer');
+    const ser=new XMLSerializer().serializeToString(doc.body);
+    const xhtml='<html xmlns="http://www.w3.org/1999/xhtml" class="'+(document.documentElement.className||'')+'"><head><style><![CDATA['+css+'\n'+fcss+'\nbody{margin:0}]]></style></head>'+ser+'</html>';
+    const scale=cfg.land?1.45:1.6,out=[];
+    for(let i=0;i<slices.length;i++){
+      if(onProgress)onProgress(i+1,slices.length);
+      out.push(await sliceJpeg(xhtml,cfg,total,slices[i][0],slices[i][1],scale,0.82));
+      await new Promise(r=>setTimeout(r,0));
+    }
+    return writePdf(out,cfg);
+  }finally{fr.remove()}
+}
+window.sslPdf={buildPdf,collect,pageCfg,native};
+})();
+
+/* ===== Branchement Android : Imprimer / PDF => fichier PDF partagé ===== */
+(function(){
+'use strict';
+const E=id=>document.getElementById(id);
+const cap=window.Capacitor,native=!!(cap&&cap.isNativePlatform&&cap.isNativePlatform());
+if(!native)return;
+let busy=false;
+const slugName=()=>String(document.title||'document').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\\/:*?"<>|\s]+/g,'_').replace(/^_+|_+$/g,'').slice(0,70)||'document';
+function overlay(txt){
+  let o=E('pdf-prog');
+  if(!o){document.body.insertAdjacentHTML('beforeend','<div id="pdf-prog" class="no-print" style="position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px"><div style="background:#fff;border-radius:16px;padding:18px 20px;max-width:320px;width:100%;text-align:center;font-size:14px"><div style="font-size:30px">📄</div><b id="pdf-prog-t"></b><div style="margin-top:6px;color:#64748b;font-size:12px">Veuillez patienter, ne quittez pas l\'application…</div></div></div>');o=E('pdf-prog')}
+  E('pdf-prog-t').textContent=txt;
+}
+const closeOv=()=>{const o=E('pdf-prog');if(o)o.remove()};
+function saveBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()}
+function htmlFallback(){
+  const {css}=window.sslPdf.collect();const c=document.body.cloneNode(true);
+  c.querySelectorAll('script,noscript,iframe').forEach(n=>n.remove());
+  const h='<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+slugName()+'</title><style>'+css+'\n#pbtn{position:fixed;right:10px;bottom:10px;padding:10px 14px;background:#0f172a;color:#fff;border:0;border-radius:10px;font:600 14px Arial}@media print{#pbtn{display:none}}</style></head><body class="'+(document.body.className||'')+'">'+c.innerHTML+'<button id="pbtn" onclick="window.print()">Imprimer / PDF</button></body></html>';
+  saveBlob(new Blob([h],{type:'text/html'}),slugName()+'.html');
+}
+async function run(){
+  try{
+    overlay('Création du PDF…');
+    const blob=await window.sslPdf.buildPdf((i,n)=>overlay('Création du PDF… page '+i+' / '+n));
+    closeOv();
+    saveBlob(blob,slugName()+'.pdf');
+  }catch(e){
+    closeOv();
+    if(confirm('Le PDF n\'a pas pu être créé ('+((e&&e.message)||e)+').\nVoulez-vous partager le document en fichier HTML à la place (à ouvrir dans Chrome, puis Imprimer / PDF) ?'))htmlFallback();
+  }
+}
+window.print=function(){
+  window.__pdf=false;const t=E('pdf-toast');if(t)t.remove();
+  if(busy)return;busy=true;
+  run().then(()=>{busy=false;setTimeout(()=>window.dispatchEvent(new Event('afterprint')),400)});
+};
+/* Liens externes (WhatsApp, e-mail…) : repli par redirection si la fenêtre est bloquée */
+const _wo=window.open;
+window.open=function(u,t,f){
+  try{const w=_wo.call(window,u,t,f);if(w)return w}catch(e){}
+  try{if(/^(https?:|mailto:|tel:|whatsapp:|sms:)/i.test(String(u)))location.href=u}catch(e){}
+  return null;
+};
+})();
+
+
+/* ===== IDENTITÉ DE L'ÉCOLE : configuration payante, code signé à usage unique, verrouillage ===== */
+(function(){
+'use strict';
+const E=id=>document.getElementById(id);
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){return false}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
+const H=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const PUB={x:'eiu-25w4ayCVt2QtGbw2RPtQuxPo9VhoHUS-Q-Aku8w',y:'DnUclIWtfJ8oXAuFl1k6PeW8Pah0gFWO0UjP1K_igm8'};
+const PRICE='10 000 F',TEL='76 277 89 55',WA='221762778955';
+const K_REQ='ssl_pay_req',K_USED='ssl_pay_used',K_SEAL='ssl_idseal',K_FAIL='ssl_pay_fail',K_STATE='senegal_school_app_state';
+const IDS=['param-ia','param-ief','param-nom-ecole','param-annee-scolaire'];
+const hasCrypto=()=>!!(window.crypto&&crypto.subtle);
+const b64d=s=>{s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+const b64e=u=>btoa(String.fromCharCode.apply(null,u)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const norm=s=>String(s==null?'':s).replace(/_/g,' ').replace(/\s+/g,' ').trim();
+function dev(){let d=LS.get('ssl_device_id');if(!d){d=Math.random().toString(36).slice(2,10)+Date.now().toString(36);LS.set('ssl_device_id',d)}return d}
+const fmtD=t=>{try{return new Date(t*1000).toLocaleDateString('fr-FR')}catch(e){return ''}};
+
+/* ---- vérification de la signature (clé publique du fournisseur) ---- */
+let PK=null;
+async function pubKey(){if(!PK)PK=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:PUB.x,y:PUB.y,ext:true},{name:'ECDSA',namedCurve:'P-256'},false,['verify']);return PK}
+function findToken(text){
+  const t=String(text||''),re=/SSL1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+  let m=re.exec(t);if(m)return m[0];
+  m=re.exec(t.replace(/\s+/g,''));return m?m[0]:null;
+}
+async function verifyToken(tok){
+  try{
+    if(!hasCrypto()||!tok)return null;
+    const m=/^SSL1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(tok).trim());if(!m)return null;
+    const ok=await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},await pubKey(),b64d(m[2]),new TextEncoder().encode('SSL1.'+m[1]));
+    if(!ok)return null;
+    const p=JSON.parse(new TextDecoder().decode(b64d(m[1])));
+    if(p.v!==1||!p.n||!p.d||!p.ia||!p.ief||!p.nom||!p.an||!p.t)return null;
+    return p;
+  }catch(e){return null}
+}
+const sameId=(P,p)=>norm(P.ia)===norm(p.ia)&&norm(P.ief)===norm(p.ief)&&norm(P.nomEcole)===norm(p.nom)&&norm(P.anneeScolaire)===norm(p.an);
+window.sslIdent={sealOk:async params=>{const p=await verifyToken(params&&params.idSeal);return !!(p&&sameId(params,p))},verify:verifyToken};
+
+/* ---- limitation des essais ---- */
+const failLeft=()=>{try{const o=JSON.parse(LS.get(K_FAIL)||'{}');return Math.max(0,Math.ceil(((o.until||0)-Date.now())/1000))}catch(e){return 0}};
+function failAdd(){let o={};try{o=JSON.parse(LS.get(K_FAIL)||'{}')}catch(e){}o.f=(o.f||0)+1;if(o.f>=4)o.until=Date.now()+Math.min(900,30*Math.pow(2,o.f-4))*1000;LS.set(K_FAIL,JSON.stringify(o))}
+const failReset=()=>LS.del(K_FAIL);
+
+/* ---- activation du code ---- */
+async function activate(text){
+  if(!hasCrypto())return{err:"Cette fonction n'est pas disponible sur ce système."};
+  const w=failLeft();if(w>0)return{err:'Trop de tentatives. Réessayez dans '+w+' seconde(s).'};
+  const tok=findToken(text);
+  if(!tok){failAdd();return{err:"Aucun code d'activation trouvé."}}
+  const p=await verifyToken(tok);
+  if(!p){failAdd();return{err:'Code invalide ou modifié.'}}
+  if(p.d!==dev())return{err:"Ce code est destiné à un autre appareil. Faites la demande depuis cet appareil."};
+  let used=[];try{used=JSON.parse(LS.get(K_USED)||'[]')}catch(e){}
+  if(used.indexOf(p.n)>=0)return{err:'Ce code a déjà été utilisé : il ne sert qu\'une seule fois.'};
+  const now=Date.now()/1000;
+  if(now-p.t>45*86400)return{err:'Ce code a expiré. Refaites une demande.'};
+  if(p.t-now>2*86400)return{err:"La date de cet appareil est incorrecte. Corrigez la date et l'heure."};
+  /* application */
+  const before=JSON.stringify(appState.params);
+  used.push(p.n);if(!LS.set(K_USED,JSON.stringify(used.slice(-50))))return{err:'Mémoire pleine : impossible d\'activer.'};
+  const P=appState.params;P.ia=p.ia;P.ief=p.ief;P.nomEcole=p.nom;P.anneeScolaire=p.an;P.idSeal=tok;
+  appState.isUnlocked=false;
+  const st=Object.assign({},appState,{isUnlocked:false});
+  if(!LS.set(K_STATE,JSON.stringify(st))){appState.params=JSON.parse(before);used.pop();LS.set(K_USED,JSON.stringify(used));return{err:'Mémoire de l\'appareil pleine : rien n\'a été modifié.'}}
+  LS.set(K_SEAL,tok);LS.del(K_REQ);failReset();
+  return{ok:true,p};
+}
+
+/* ---- verrouillage hermétique : l'identité doit toujours correspondre au dernier cachet valide ---- */
+async function enforce(){
+  try{
+    if(typeof appState==='undefined'||appState.isUnlocked||!hasCrypto())return;
+    const P=appState.params||{};let best=null;
+    for(const tok of [LS.get(K_SEAL),P.idSeal]){const p=await verifyToken(tok);if(p&&(!best||p.t>best.p.t))best={p,tok}}
+    if(!best)return;
+    let ch=false;const w={ia:best.p.ia,ief:best.p.ief,nomEcole:best.p.nom,anneeScolaire:best.p.an};
+    Object.keys(w).forEach(k=>{if(norm(P[k])!==norm(w[k])){P[k]=w[k];ch=true}});
+    if(P.idSeal!==best.tok){P.idSeal=best.tok;ch=true}
+    if(LS.get(K_SEAL)!==best.tok)LS.set(K_SEAL,best.tok);
+    if(ch){
+      LS.set(K_STATE,JSON.stringify(Object.assign({},appState,{isUnlocked:false})));
+      if(!sessionStorage.getItem('pm_rl')){sessionStorage.setItem('pm_rl','1');location.reload();return}
+      if(typeof applyParamsToUI==='function')applyParamsToUI();
+    }
+    if(typeof lockParams==='function')lockParams();
+  }catch(e){}
+}
+/* l'administrateur qui change l'identité retire l'ancien cachet */
+const _save0=window.saveStateToStorage;
+if(typeof _save0==='function'){
+  let tm=null;
+  window.saveStateToStorage=function(){
+    try{
+      if(appState.isUnlocked&&appState.params&&appState.params.idSeal){
+        const m=/^SSL1\.([^.]+)\./.exec(appState.params.idSeal);
+        if(m){const p=JSON.parse(new TextDecoder().decode(b64d(m[1])));if(!sameId(appState.params,p)){delete appState.params.idSeal;LS.del(K_SEAL)}}
+      }
+    }catch(e){}
+    const r=_save0.apply(this,arguments);
+    clearTimeout(tm);tm=setTimeout(enforce,1200);
+    return r;
+  };
+}
+
+/* ---- fenêtres ---- */
+function modal(html){const o=E('pm-modal');if(o)o.remove();document.body.insertAdjacentHTML('beforeend','<div id="pm-modal" class="no-print" style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:10010;display:flex;align-items:center;justify-content:center;padding:10px">'+html+'</div>')}
+const closeM=()=>{const o=E('pm-modal');if(o)o.remove()};
+function toast(m){const o=E('pm-toast');if(o)o.remove();document.body.insertAdjacentHTML('beforeend','<div id="pm-toast" class="no-print" style="position:fixed;left:10px;right:10px;bottom:14px;z-index:10060;background:#0f172a;color:#fff;border-radius:12px;padding:10px 14px;font-size:13px">'+H(m)+'</div>');setTimeout(()=>{const t=E('pm-toast');if(t)t.remove()},5000)}
+async function copy(t){try{await navigator.clipboard.writeText(t);return true}catch(e){try{const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;left:-999px';document.body.appendChild(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}catch(e2){return false}}}
+
+/* message de blocage */
+function gate(){
+  modal('<div class="card" style="max-width:420px;width:100%"><h3 class="font-bold text-lg mb-2">🔒 Modification protégée</h3><p class="text-sm text-slate-700">Veuillez vous connecter sur Internet pour effectuer le paiement ('+PRICE+' par Wave ou Orange Money) afin de pouvoir modifier l\'IA, l\'IEF, le nom de l\'école et l\'année scolaire.</p><p class="text-xs text-slate-500 mt-2">Cette configuration ne se fait qu\'une seule fois : ensuite, ces champs sont verrouillés.</p><div class="flex flex-wrap gap-2 justify-end mt-4"><button class="btn l" id="pm-no">Annuler</button><button class="btn a" id="pm-have">J\'ai déjà un code</button><button class="btn g" id="pm-yes">Continuer</button></div></div>');
+  E('pm-no').onclick=closeM;E('pm-yes').onclick=()=>openForm(false);E('pm-have').onclick=()=>openForm(true);
+}
+function iaMap(){try{return typeof IA_IEF_MAP!=='undefined'?IA_IEF_MAP:{}}catch(e){return {}}}
+function reqRead(){try{return JSON.parse(LS.get(K_REQ)||'null')}catch(e){return null}}
+function normAn(v){const m=/^\s*(\d{4})\s*[-–\/]\s*(\d{4})\s*$/.exec(v||'');if(!m)return null;const a=+m[1],b=+m[2];if(b!==a+1)return null;return a+' - '+b}
+function readForm(){
+  const ia=norm(E('pm-ia').value),ief=norm(E('pm-ief').value),nom=norm(E('pm-nom').value).toUpperCase(),an=normAn(E('pm-an').value);
+  if(!ia||ia.length>60)return{err:"Renseignez l'Inspection d'Académie (IA)."};
+  if(!ief||ief.length>60)return{err:"Renseignez l'IEF."};
+  if(!nom||nom.length>90)return{err:"Renseignez le nom de l'école."};
+  if(!an)return{err:"Année scolaire invalide. Exemple : 2025-2026."};
+  return{ia,ief,nom,an};
+}
+function openForm(haveCode){
+  const rq=reqRead(),P=(typeof appState!=='undefined'&&appState.params)||{};
+  const dv=(v,d)=>H(rq&&rq[v]!=null?rq[v]:d);
+  modal('<div class="card" style="max-width:520px;width:100%;max-height:93vh;overflow:auto"><h3 class="font-bold text-lg">Configuration de l\'école</h3><p class="text-xs text-slate-500 mb-2">Paiement unique de <b>'+PRICE+'</b>. Une seule configuration, puis les champs sont verrouillés.</p>'+
+  '<div class="font-bold text-sm mb-1">1. Remplissez le formulaire</div><div class="space-y-2">'+
+  '<div><label class="lb">Inspection d\'Académie (IA)</label><input id="pm-ia" class="inp" list="dl-ia" autocomplete="off" value="'+dv('ia','')+'"></div>'+
+  '<div><label class="lb">IEF</label><input id="pm-ief" class="inp" list="pm-dl-ief" autocomplete="off" value="'+dv('ief','')+'"><datalist id="pm-dl-ief"></datalist></div>'+
+  '<div><label class="lb">Nom de l\'école</label><input id="pm-nom" class="inp" autocomplete="off" value="'+dv('nom','')+'"></div>'+
+  '<div><label class="lb">Année scolaire</label><input id="pm-an" class="inp" placeholder="2025-2026" inputmode="numeric" autocomplete="off" value="'+dv('an','')+'"></div></div>'+
+  '<div class="border rounded-lg p-2 mt-3 bg-amber-50 text-sm"><b>2. Payez '+PRICE+'</b> par Wave ou Orange Money au <b>'+TEL+'</b><div class="mt-1"><button class="btn l" id="pm-cp">Copier le numéro</button></div><div class="text-xs text-slate-600 mt-1">Gardez l\'identifiant (ID) de la transaction.</div></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-emerald-50 text-sm"><b>3. Envoyez votre demande</b><div class="text-xs text-slate-600">WhatsApp s\'ouvre avec le message prêt. Ajoutez l\'ID de la transaction. Dès que le paiement est vérifié, vous recevrez un code.</div><div class="flex flex-wrap gap-2 mt-1"><button class="btn g" id="pm-wa">Envoyer sur WhatsApp</button><button class="btn l" id="pm-cpq">Copier la demande</button></div></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-blue-50 text-sm"><b>4. Collez le code reçu</b><textarea id="pm-code" class="inp" rows="3" placeholder="SSL1.…" style="font-family:monospace;font-size:11px"></textarea><div class="flex flex-wrap gap-2 mt-1"><button class="btn" style="background:#2563eb" id="pm-ok">Valider le paiement et configurer</button><label class="btn l" style="cursor:pointer">Fichier de code<input type="file" id="pm-file" style="display:none"></label></div><div id="pm-msg" class="text-xs mt-1"></div></div>'+
+  '<p class="text-[11px] text-slate-500 mt-2">Le code est valable pour cet appareil et une seule fois. Ne modifiez plus le formulaire après l\'envoi de la demande.</p><div class="text-right mt-2"><button class="btn l" id="pm-close">Fermer</button></div></div>');
+  const setIef=()=>{const dl=E('pm-dl-ief');dl.innerHTML='';const map=iaMap();const t=norm(E('pm-ia').value).toUpperCase();const key=Object.keys(map).find(k=>norm(k).toUpperCase()===t);(map[key]||[]).forEach(v=>{const o=document.createElement('option');o.value=v;dl.appendChild(o)})};
+  E('pm-ia').oninput=setIef;setIef();
+  E('pm-close').onclick=closeM;
+  E('pm-cp').onclick=async()=>{toast(await copy(TEL.replace(/\s/g,''))?'Numéro copié : '+TEL:'Copie impossible : notez '+TEL)};
+  const buildReq=()=>{
+    const f=readForm();if(f.err){E('pm-msg').innerHTML='<span class="text-red-600">'+H(f.err)+'</span>';return null}
+    let r=reqRead();
+    if(!r||r.ia!==f.ia||r.ief!==f.ief||r.nom!==f.nom||r.an!==f.an||r.d!==dev()){
+      const al='ABCDEFGHJKMNPQRSTUVWXYZ23456789',rb=crypto.getRandomValues(new Uint8Array(8));
+      r={n:[...rb].map(x=>al[x%al.length]).join(''),d:dev(),ia:f.ia,ief:f.ief,nom:f.nom,an:f.an};LS.set(K_REQ,JSON.stringify(r));
+    }
+    const j=b64e(new TextEncoder().encode(JSON.stringify(r)));
+    const msg='*Demande de configuration SSL*\nRéf : '+r.n+'\nIA : '+r.ia+'\nIEF : '+r.ief+'\nÉcole : '+r.nom+'\nAnnée scolaire : '+r.an+'\nMontant : '+PRICE+' (Wave / Orange Money)\nID de transaction : ______\nSSLREQ:'+j;
+    return msg;
+  };
+  E('pm-wa').onclick=()=>{if(!hasCrypto())return alert("Cette fonction n'est pas disponible sur ce système.");const m=buildReq();if(!m)return;window.open('https://wa.me/'+WA+'?text='+encodeURIComponent(m),'_blank')};
+  E('pm-cpq').onclick=async()=>{const m=buildReq();if(!m)return;toast(await copy(m)?'Demande copiée : collez-la dans WhatsApp.':'Copie impossible.')};
+  const go=async txt=>{
+    const msg=E('pm-msg');msg.innerHTML='Vérification…';
+    const r=await activate(txt);
+    if(r.err){msg.innerHTML='<span class="text-red-600">'+H(r.err)+'</span>';return}
+    msg.innerHTML='<span class="text-emerald-700">✔ Paiement validé. Configuration en cours…</span>';
+    setTimeout(()=>{alert('Configuration terminée : '+r.p.nom+' — '+r.p.ief+' — '+r.p.an+'.\nLes champs sont de nouveau verrouillés.');location.reload()},300);
+  };
+  E('pm-ok').onclick=()=>go(E('pm-code').value);
+  E('pm-file').onchange=function(){const f=this.files&&this.files[0];this.value='';if(!f)return;const r=new FileReader();r.onload=()=>go(String(r.result||''));r.readAsText(f)};
+  if(haveCode)setTimeout(()=>{const c=E('pm-code');if(c)c.focus()},100);
+}
+
+/* ---- mise en place dans l'écran Paramètres ---- */
+async function status(){
+  const st=E('pm-st'),dt=E('pm-det');if(!st)return;
+  let p=null;try{p=await verifyToken(LS.get(K_SEAL))||await verifyToken((appState.params||{}).idSeal)}catch(e){}
+  if(p){st.textContent='🔒 Identité certifiée';dt.textContent=p.nom+' — '+p.ief+' — '+p.an+' (configurée le '+fmtD(p.t)+')'}
+  else{st.textContent='🔒 Identité verrouillée';dt.textContent='Modifiable uniquement après paiement de '+PRICE+'.'}
+}
+function install(){
+  const box=E('admin-code-input');if(!box||E('pm-bar'))return;
+  if(!document.getElementById('pm-css'))document.head.insertAdjacentHTML('beforeend','<style id="pm-css">.pm-wrap{position:relative}.pm-ov{position:absolute;inset:0;background:transparent;border:0;cursor:pointer;z-index:2}.pm-wrap>input:not(:disabled)+.pm-ov{display:none}</style>');
+  const adm=box.closest('.bg-slate-900')||box.parentElement;
+  adm.insertAdjacentHTML('beforebegin','<div id="pm-bar" class="no-print rounded-xl border border-emerald-300 bg-emerald-50 p-3 flex flex-wrap items-center justify-between gap-2"><div class="text-sm"><b id="pm-st">🔒 Identité verrouillée</b><div id="pm-det" class="text-xs text-slate-600"></div></div><button type="button" class="btn g" id="pm-open">🔐 Modifier l\'identité ('+PRICE+')</button></div>');
+  E('pm-open').onclick=gate;
+  IDS.forEach(id=>{const el=E(id);if(!el||(el.parentElement&&el.parentElement.classList.contains('pm-wrap')))return;
+    const w=document.createElement('div');w.className='pm-wrap';el.parentNode.insertBefore(w,el);w.appendChild(el);
+    const b=document.createElement('button');b.type='button';b.className='pm-ov';b.setAttribute('aria-label','Modifier (paiement requis)');b.onclick=gate;w.appendChild(b)});
+  document.querySelectorAll('button').forEach(b=>{const oc=b.getAttribute('onclick')||'';
+    if(/cfg-file/.test(oc)){b.setAttribute('onclick','');b.onclick=gate;b.innerHTML='<i class="fa-solid fa-key mr-1"></i>Entrer un code de configuration'}
+    if(/exportConfigEcole/.test(oc))b.style.display='none'});
+  status();
+}
+/* boutons existants */
+const _un=window.unlockParams;
+window.unlockParams=function(){const i=E('admin-code-input');if(i&&!i.value.trim()){gate();return}return _un.apply(this,arguments)};
+window.exportConfigEcole=function(){gate()};
+window.importConfigEcole=function(inp){const f=inp&&inp.files&&inp.files[0];if(inp)inp.value='';if(!f)return;const r=new FileReader();r.onload=async()=>{const x=await activate(String(r.result||''));if(x.err)alert(x.err);else{alert('Configuration terminée.');location.reload()}};r.readAsText(f)};
+window.sslPay={open:gate};
+window.addEventListener('load',()=>setTimeout(()=>{install();enforce()},900));
+document.addEventListener('click',e=>{if(e.target&&e.target.closest&&e.target.closest('#nav-params,[onclick*="params"]'))setTimeout(install,200)},true);
 })();
 
 </script>
