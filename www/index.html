@@ -4178,11 +4178,12 @@ function collect(){
   }
   return {css:css.join('\n'),pages:pages.join(' '),faces};
 }
+function lastMatch(re,str){const g=new RegExp(re.source,'gi');let m,l=null;while((m=g.exec(str||'')))l=m;return l}
 function pageCfg(pagesCss){
   let land=false,mm=10;
-  const s=/size\s*:\s*([^;}]+)/i.exec(pagesCss||'');
+  const s=lastMatch(/size\s*:\s*([^;}]+)/,pagesCss);
   if(s)land=/landscape/i.test(s[1]);
-  const m=/margin\s*:\s*([\d.]+)\s*mm/i.exec(pagesCss||'');
+  const m=lastMatch(/margin\s*:\s*([\d.]+)\s*mm/,pagesCss);
   if(m)mm=parseFloat(m[1]);
   const pw=(land?297:210)*MM,ph=(land?210:297)*MM,mg=mm*MM;
   return {land,pw,ph,mg,cw:Math.round(pw-2*mg),ch:Math.round(ph-2*mg)};
@@ -4221,14 +4222,26 @@ function cloneBody(){
   return c;
 }
 function makeFrame(cfg,css,body){
+  const FH=cfg.ch;
   return new Promise((res,rej)=>{
     const fr=document.createElement('iframe');
     fr.setAttribute('aria-hidden','true');
-    fr.style.cssText='position:fixed;left:-99999px;top:0;width:'+cfg.cw+'px;height:800px;border:0;visibility:hidden';
+    fr.style.cssText='position:fixed;left:-99999px;top:0;width:'+cfg.cw+'px;height:'+FH+'px;border:0;visibility:hidden';
     const links=[...document.querySelectorAll('link[rel=stylesheet]')].map(l=>'<link rel="stylesheet" href="'+l.href+'">').join('');
     fr.srcdoc='<!doctype html><html class="'+(document.documentElement.className||'')+'"><head><meta charset="utf-8"><base href="'+document.baseURI+'">'+links+'<style>'+css+'</style></head><body class="'+(document.body.className||'')+'" style="margin:0">'+body.innerHTML+'</body></html>';
     fr.onload=()=>res(fr);fr.onerror=()=>rej(new Error('cadre'));
     document.body.appendChild(fr);
+  });
+}
+function unclip(doc){
+  const w=doc.defaultView;
+  doc.documentElement.style.setProperty('height','auto','important');doc.documentElement.style.setProperty('overflow','visible','important');
+  doc.body.style.setProperty('height','auto','important');doc.body.style.setProperty('min-height','0','important');doc.body.style.setProperty('overflow','visible','important');
+  doc.body.querySelectorAll('*').forEach(el=>{
+    if(el.scrollHeight>el.clientHeight+2||el.scrollWidth>el.clientWidth+2){
+      const cs=w.getComputedStyle(el),sc=/(hidden|auto|scroll)/;
+      if(sc.test(cs.overflowY)||sc.test(cs.overflowX)){el.style.setProperty('overflow','visible','important');el.style.setProperty('height','auto','important');el.style.setProperty('max-height','none','important')}
+    }
   });
 }
 async function settle(doc){
@@ -4258,6 +4271,7 @@ function computeCuts(doc,cfg){
   const fs=[...forced].sort((x,y)=>x-y),slices=[];
   for(let i=0;i<fs.length-1;i++){
     let a=fs[i];const b=fs[i+1];if(b-a<3)continue;
+    if(b-a<=cfg.ch*1.45){slices.push([a,b]);continue}
     while(b-a>cfg.ch+2){
       const lim=a+cfg.ch;let cut=0;
       for(const c of cand){if(c>lim)continue;if(c<=a+cfg.ch*0.4)break;if(!crossed(c)){cut=c;break}}
@@ -4271,14 +4285,16 @@ function computeCuts(doc,cfg){
 
 /* ---- rendu d'une tranche en JPEG ---- */
 function loadImg(url){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('rendu'));i.src=url})}
-async function sliceJpeg(xhtml,cfg,total,y0,y1,scale,q){
-  const h=Math.max(1,y1-y0);
-  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+cfg.cw+'" height="'+h+'"><foreignObject x="0" y="'+(-y0)+'" width="'+cfg.cw+'" height="'+total+'">'+xhtml+'</foreignObject></svg>';
-  const url='data:image/svg+xml;base64,'+b64(svg);
-  const img=await loadImg(url);
+async function sliceJpeg(xhtml,cfg,LW,chL,total,y0,y1,scale,q){
+  const H=Math.max(1,y1-y0),f=cfg.cw/LW;
+  let s=f;if(H*f>cfg.ch)s=cfg.ch/H;            /* page trop haute : on réduit pour tout faire tenir */
+  const svgH=Math.max(Math.ceil(chL),H);
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+LW+'" height="'+svgH+'"><foreignObject x="0" y="'+(-y0)+'" width="'+LW+'" height="'+total+'">'+xhtml+'</foreignObject></svg>';
+  const img=await loadImg('data:image/svg+xml;base64,'+b64(svg));
   const cv=document.createElement('canvas');cv.width=Math.round(cfg.pw*scale);cv.height=Math.round(cfg.ph*scale);
   const x=cv.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,cv.width,cv.height);
-  x.drawImage(img,cfg.mg*scale,cfg.mg*scale,cfg.cw*scale,h*scale);
+  const dw=LW*s,dh=H*s,ox=Math.max(0,(cfg.cw-dw)/2);
+  x.drawImage(img,0,0,LW,H,(cfg.mg+ox)*scale,cfg.mg*scale,dw*scale,dh*scale);
   const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',q));
   if(!blob)throw new Error('image');
   const buf=new Uint8Array(await blob.arrayBuffer());
@@ -4317,23 +4333,28 @@ async function buildPdf(onProgress){
   const body=cloneBody(),fr=await makeFrame(cfg,css,body);
   try{
     const doc=fr.contentDocument,w=fr.contentWindow;
-    await settle(doc);
-    const used=new Set();doc.body.querySelectorAll('*').forEach(el=>{const f=w.getComputedStyle(el).fontFamily;f.split(',').forEach(s=>used.add(s.replace(/["']/g,'').trim().toLowerCase()))});
+    await settle(doc);unclip(doc);await new Promise(r=>setTimeout(r,60));
+    let LW=cfg.cw;const sw=Math.max(doc.documentElement.scrollWidth,doc.body.scrollWidth);
+    if(sw>cfg.cw+3){LW=Math.min(Math.ceil(sw),Math.round(cfg.cw*2.2));fr.style.width=LW+'px';await settle(doc)}
+    const f=cfg.cw/LW,chL=cfg.ch/f;
+    const used=new Set();doc.body.querySelectorAll('*').forEach(el=>{const ff=w.getComputedStyle(el).fontFamily;ff.split(',').forEach(s=>used.add(s.replace(/["']/g,'').trim().toLowerCase()))});
     const fcss=await fontCss(faces,used);
-    const {slices,total}=computeCuts(doc,cfg);
+    const {slices,total}=computeCuts(doc,{ch:chL});
     if(!slices.length)throw new Error('Rien à imprimer');
     const ser=new XMLSerializer().serializeToString(doc.body);
     const xhtml='<html xmlns="http://www.w3.org/1999/xhtml" class="'+(document.documentElement.className||'')+'"><head><style><![CDATA['+css+'\n'+fcss+'\nbody{margin:0}]]></style></head>'+ser+'</html>';
-    const scale=cfg.land?1.45:1.6,out=[];
-    for(let i=0;i<slices.length;i++){
-      if(onProgress)onProgress(i+1,slices.length);
-      out.push(await sliceJpeg(xhtml,cfg,total,slices[i][0],slices[i][1],scale,0.82));
+    const n=slices.length;let scale=cfg.land?1.45:1.6,q=0.82;
+    if(n>60){scale*=0.8;q=0.7}else if(n>30){scale*=0.9;q=0.76}
+    const out=[];
+    for(let i=0;i<n;i++){
+      if(onProgress)onProgress(i+1,n);
+      out.push(await sliceJpeg(xhtml,cfg,LW,chL,total,slices[i][0],slices[i][1],scale,q));
       await new Promise(r=>setTimeout(r,0));
     }
     return writePdf(out,cfg);
   }finally{fr.remove()}
 }
-window.sslPdf={buildPdf,collect,pageCfg,native};
+window.sslPdf={buildPdf,collect,pageCfg,native,_d:{cloneBody,makeFrame,settle,computeCuts}};
 })();
 
 /* ===== Branchement Android : Imprimer / PDF => fichier PDF partagé ===== */
@@ -4351,6 +4372,31 @@ function overlay(txt){
 }
 const closeOv=()=>{const o=E('pdf-prog');if(o)o.remove()};
 function saveBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()}
+const PL=()=>(window.Capacitor&&window.Capacitor.Plugins)||{};
+const b64Of=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=rej;r.readAsDataURL(b)});
+async function saveToPhone(blob,name){
+  const FS=PL().Filesystem;if(!FS)throw new Error('Enregistrement indisponible');
+  const data=await b64Of(blob);
+  try{if(FS.requestPermissions)await FS.requestPermissions()}catch(e){}
+  for(const [dir,path,label] of [['EXTERNAL_STORAGE','Download/SSL/'+name,'Téléchargements/SSL'],['DOCUMENTS','SSL/'+name,'Documents/SSL']]){
+    try{await FS.writeFile({path,data,directory:dir,recursive:true});return label+'/'+name}catch(e){}
+  }
+  throw new Error("Le téléphone refuse l'écriture directe. Utilisez « Partager » puis « Enregistrer » (Fichiers ou Drive).");
+}
+async function shareIt(blob,name){
+  const FS=PL().Filesystem,SH=PL().Share;if(!FS||!SH)throw new Error('Partage indisponible');
+  const r=await FS.writeFile({path:'SSL/'+name,data:await b64Of(blob),directory:'CACHE',recursive:true});
+  await SH.share({title:name,url:r.uri,dialogTitle:'Envoyer ou enregistrer le PDF'});
+}
+function resultDialog(blob,name){
+  const o=E('pdf-res');if(o)o.remove();
+  const bs='display:block;width:100%;border:0;border-radius:10px;padding:11px;margin-top:8px;font-weight:700;font-size:14px;color:#fff;background:';
+  document.body.insertAdjacentHTML('beforeend','<div id="pdf-res" class="no-print" style="position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:10051;display:flex;align-items:center;justify-content:center;padding:14px"><div style="background:#fff;border-radius:16px;padding:16px;max-width:340px;width:100%;font-size:14px"><div style="font-size:28px;text-align:center">✅</div><b style="display:block;text-align:center">PDF prêt</b><div style="text-align:center;color:#64748b;font-size:12px;margin:4px 0 8px;word-break:break-all">'+name+' · '+(blob.size/1048576).toFixed(1)+' Mo</div><button id="pdf-sh" style="'+bs+'#059669">📤 Partager (WhatsApp, e-mail…)</button><button id="pdf-sv" style="'+bs+'#2563eb">💾 Enregistrer dans le téléphone</button><div id="pdf-msg" style="font-size:12px;margin-top:8px;color:#334155"></div><button id="pdf-cl" style="'+bs+'#64748b">Fermer</button></div></div>');
+  const msg=t=>{E('pdf-msg').textContent=t};
+  E('pdf-cl').onclick=()=>E('pdf-res').remove();
+  E('pdf-sh').onclick=async()=>{try{msg('Ouverture du partage…');await shareIt(blob,name);msg('')}catch(e){msg(String(e&&e.message||e))}};
+  E('pdf-sv').onclick=async()=>{try{msg('Enregistrement…');msg('✔ Enregistré : '+await saveToPhone(blob,name))}catch(e){msg(String(e&&e.message||e))}};
+}
 function htmlFallback(){
   const {css}=window.sslPdf.collect();const c=document.body.cloneNode(true);
   c.querySelectorAll('script,noscript,iframe').forEach(n=>n.remove());
@@ -4362,7 +4408,7 @@ async function run(){
     overlay('Création du PDF…');
     const blob=await window.sslPdf.buildPdf((i,n)=>overlay('Création du PDF… page '+i+' / '+n));
     closeOv();
-    saveBlob(blob,slugName()+'.pdf');
+    resultDialog(blob,slugName()+'.pdf');
   }catch(e){
     closeOv();
     if(confirm('Le PDF n\'a pas pu être créé ('+((e&&e.message)||e)+').\nVoulez-vous partager le document en fichier HTML à la place (à ouvrir dans Chrome, puis Imprimer / PDF) ?'))htmlFallback();
@@ -4390,7 +4436,11 @@ const E=id=>document.getElementById(id);
 const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){return false}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
 const H=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const PUB={x:'eiu-25w4ayCVt2QtGbw2RPtQuxPo9VhoHUS-Q-Aku8w',y:'DnUclIWtfJ8oXAuFl1k6PeW8Pah0gFWO0UjP1K_igm8'};
-const PRICE='10 000 F',TEL='76 277 89 55',WA='221762778955';
+let PRICE='10 000 F',TEL='76 277 89 55',WA='221762778955';
+function loadCfg(){let c={};try{c=JSON.parse(LS.get('ssl_cfg')||'{}')}catch(e){}
+  PRICE=String(c.price||'10 000 F').slice(0,24);TEL=String(c.tel||'76 277 89 55').slice(0,24);
+  const d=TEL.replace(/\D/g,'');WA=d.length===9?'221'+d:d}
+loadCfg();
 const K_REQ='ssl_pay_req',K_USED='ssl_pay_used',K_SEAL='ssl_idseal',K_FAIL='ssl_pay_fail',K_STATE='senegal_school_app_state';
 const IDS=['param-ia','param-ief','param-nom-ecole','param-annee-scolaire'];
 const hasCrypto=()=>!!(window.crypto&&crypto.subtle);
@@ -4408,14 +4458,17 @@ function findToken(text){
   let m=re.exec(t);if(m)return m[0];
   m=re.exec(t.replace(/\s+/g,''));return m?m[0]:null;
 }
-async function verifyToken(tok){
+async function verifyToken(tok,kind){
   try{
     if(!hasCrypto()||!tok)return null;
     const m=/^SSL1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(tok).trim());if(!m)return null;
     const ok=await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},await pubKey(),b64d(m[2]),new TextEncoder().encode('SSL1.'+m[1]));
     if(!ok)return null;
     const p=JSON.parse(new TextDecoder().decode(b64d(m[1])));
-    if(p.v!==1||!p.n||!p.d||!p.ia||!p.ief||!p.nom||!p.an||!p.t)return null;
+    if(p.v!==1||!p.n||!p.d||!p.t)return null;
+    if(p.k==='REN'){return(kind==='REN'&&p.days>0&&p.days<=800)?p:null}
+    if(kind==='REN')return null;
+    if(!p.ia||!p.ief||!p.nom||!p.an)return null;
     return p;
   }catch(e){return null}
 }
@@ -4434,7 +4487,7 @@ async function activate(text){
   const tok=findToken(text);
   if(!tok){failAdd();return{err:"Aucun code d'activation trouvé."}}
   const p=await verifyToken(tok);
-  if(!p){failAdd();return{err:'Code invalide ou modifié.'}}
+  if(!p){failAdd();return{err:(await verifyToken(tok,'REN'))?'Ce code est un code de renouvellement de licence (écran « Licence »).':'Code invalide ou modifié.'}}
   if(p.d!==dev())return{err:"Ce code est destiné à un autre appareil. Faites la demande depuis cet appareil."};
   let used=[];try{used=JSON.parse(LS.get(K_USED)||'[]')}catch(e){}
   if(used.indexOf(p.n)>=0)return{err:'Ce code a déjà été utilisé : il ne sert qu\'une seule fois.'};
@@ -4575,9 +4628,111 @@ function install(){
 }
 /* boutons existants */
 const _un=window.unlockParams;
-window.unlockParams=function(){const i=E('admin-code-input');if(i&&!i.value.trim()){gate();return}return _un.apply(this,arguments)};
+window.unlockParams=async function(){const i=E('admin-code-input');if(i&&!i.value.trim()){gate();return}if(i&&await magicOK(i.value)){i.value='';openMagic();return}return _un.apply(this,arguments)};
 window.exportConfigEcole=function(){gate()};
 window.importConfigEcole=function(inp){const f=inp&&inp.files&&inp.files[0];if(inp)inp.value='';if(!f)return;const r=new FileReader();r.onload=async()=>{const x=await activate(String(r.result||''));if(x.err)alert(x.err);else{alert('Configuration terminée.');location.reload()}};r.readAsText(f)};
+
+/* ===== BOÎTE MAGIQUE (fournisseur) + LICENCE À DURÉE LIMITÉE ===== */
+const MG={salt:'XmVAHUUbC3DQMXj3PYkgng',hash:'qTxqsMYs2zjACYRme1MwAOD90YpJHDHUmkeuBJXtFJc'};
+const K_LIC='ssl_lic',K_MF='ssl_magic_fail';
+async function magicOK(v){
+  try{
+    v=String(v||'').trim();if(!v||!hasCrypto())return false;
+    let f={};try{f=JSON.parse(LS.get(K_MF)||'{}')}catch(e){}
+    if((f.until||0)>Date.now())return false;
+    const km=await crypto.subtle.importKey('raw',new TextEncoder().encode('magic:'+v),'PBKDF2',false,['deriveBits']);
+    const bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:b64d(MG.salt),iterations:150000},km,256));
+    const want=b64d(MG.hash);let d=0;for(let i=0;i<want.length;i++)d|=bits[i]^want[i];
+    if(d===0){LS.del(K_MF);return true}
+    f.f=(f.f||0)+1;if(f.f>=5)f.until=Date.now()+Math.min(900,30*Math.pow(2,f.f-5))*1000;LS.set(K_MF,JSON.stringify(f));return false;
+  }catch(e){return false}
+}
+const licRead=()=>{try{return JSON.parse(LS.get(K_LIC)||'{}')||{}}catch(e){return {}}};
+const licWrite=o=>LS.set(K_LIC,JSON.stringify(o));
+const licNow=()=>Math.max(Date.now()/1000,licRead().max||0);
+const fmtS=t=>{try{return new Date(t*1000).toLocaleDateString('fr-FR')}catch(e){return ''}};
+
+function openMagic(){
+  const c=(()=>{try{return JSON.parse(LS.get('ssl_cfg')||'{}')}catch(e){return {}}})(),l=licRead();
+  const lic=l.exp?('Expire le '+fmtS(l.exp)+(licNow()>=l.exp?' (EXPIRÉE)':'')):'Illimitée';
+  modal('<div class="card" style="max-width:480px;width:100%;max-height:93vh;overflow:auto"><h3 class="font-bold text-lg">✨ Boîte magique</h3><p class="text-xs text-slate-500 mb-2">Réglages du fournisseur pour cet appareil.</p>'+
+  '<label class="lb">Montant de la configuration</label><input id="mg-price" class="inp" value="'+H(c.price||PRICE)+'">'+
+  '<label class="lb mt-2">Numéro Wave / Orange Money</label><input id="mg-tel" class="inp" inputmode="tel" value="'+H(c.tel||TEL)+'">'+
+  '<button class="btn g mt-2" id="mg-save">Enregistrer le montant et le numéro</button>'+
+  '<hr class="my-3"><div class="font-bold text-sm">Durée d\'utilisation de cet appareil</div><div class="text-xs text-slate-600">État actuel : <b id="mg-st">'+H(lic)+'</b></div>'+
+  '<div class="flex gap-2 mt-1"><input id="mg-days" class="inp" type="number" min="1" max="3650" placeholder="Nombre de jours" style="max-width:150px"><button class="btn a" id="mg-start">Démarrer la période</button></div>'+
+  '<div class="flex flex-wrap gap-1 mt-1">'+[30,90,180,365].map(d=>'<button class="btn l" data-d="'+d+'">'+d+' j</button>').join('')+'<button class="btn l" id="mg-unl">Illimitée</button></div>'+
+  '<p class="text-[11px] text-slate-500 mt-2">À la fin de la période, l\'application se verrouille jusqu\'à un code de renouvellement (un seul par an, à usage unique).</p>'+
+  '<div class="text-[11px] mt-2">Identifiant de cet appareil : <b style="word-break:break-all">'+H(dev())+'</b></div><div id="mg-msg" class="text-xs mt-1 text-emerald-700"></div><div class="text-right mt-2"><button class="btn l" id="mg-close">Fermer</button></div></div>');
+  const msg=t=>{E('mg-msg').textContent=t};
+  E('mg-close').onclick=closeM;
+  E('mg-save').onclick=()=>{const p=E('mg-price').value.trim().slice(0,24),t=E('mg-tel').value.trim().slice(0,24);if(!p||!/\d{8,}/.test(t.replace(/\D/g,'')))return msg('Montant ou numéro invalide.');LS.set('ssl_cfg',JSON.stringify({price:p,tel:t}));loadCfg();const b=E('pm-open');if(b)b.textContent='🔐 Modifier l\'identité ('+PRICE+')';msg('✔ Enregistré.')};
+  const start=d=>{d=Math.floor(+d);if(!(d>=1&&d<=3650))return msg('Durée invalide (1 à 3650 jours).');const l=licRead();l.exp=Date.now()/1000+d*86400;l.max=Date.now()/1000;licWrite(l);E('mg-st').textContent='Expire le '+fmtS(l.exp);msg('✔ Période de '+d+' jours démarrée.');licCheck()};
+  E('mg-start').onclick=()=>start(E('mg-days').value);
+  document.querySelectorAll('#pm-modal [data-d]').forEach(b=>b.onclick=()=>{E('mg-days').value=b.dataset.d});
+  E('mg-unl').onclick=()=>{const l=licRead();l.exp=0;licWrite(l);E('mg-st').textContent='Illimitée';msg('✔ Durée illimitée.');licCheck()};
+}
+
+/* ---- renouvellement ---- */
+async function activateRen(text){
+  if(!hasCrypto())return{err:"Cette fonction n'est pas disponible sur ce système."};
+  const w=failLeft();if(w>0)return{err:'Trop de tentatives. Réessayez dans '+w+' seconde(s).'};
+  const tok=findToken(text);if(!tok){failAdd();return{err:'Aucun code trouvé.'}}
+  const p=await verifyToken(tok,'REN');
+  if(!p){failAdd();return{err:'Code invalide ou modifié.'}}
+  if(p.d!==dev())return{err:'Ce code est destiné à un autre appareil.'};
+  const l=licRead(),now=Date.now()/1000;l.used=l.used||[];
+  if(l.used.indexOf(p.n)>=0)return{err:'Ce code a déjà été utilisé : il ne sert qu\'une seule fois.'};
+  if(now-p.t>45*86400)return{err:'Ce code a expiré. Refaites une demande.'};
+  if(p.t-now>2*86400)return{err:"La date de cet appareil est incorrecte."};
+  if(l.ren&&now-l.ren<365*86400)return{err:'Un renouvellement a déjà été fait cette année (prochain possible le '+fmtS(l.ren+365*86400)+').'};
+  const base=Math.max(licNow(),l.exp||0);
+  l.exp=base+p.days*86400;l.ren=now;l.max=Math.max(l.max||0,now);l.used.push(p.n);l.used=l.used.slice(-30);
+  if(!licWrite(l))return{err:'Mémoire pleine.'};failReset();LS.del('ssl_ren_req');
+  return{ok:true,exp:l.exp};
+}
+function renMsg(){
+  const l=licRead(),P=(typeof appState!=='undefined'&&appState.params)||{};
+  let r=null;try{r=JSON.parse(LS.get('ssl_ren_req')||'null')}catch(e){}
+  if(!r||r.d!==dev()){const al='ABCDEFGHJKMNPQRSTUVWXYZ23456789',rb=crypto.getRandomValues(new Uint8Array(8));r={n:[...rb].map(x=>al[x%al.length]).join(''),d:dev()};LS.set('ssl_ren_req',JSON.stringify(r))}
+  const j=b64e(new TextEncoder().encode(JSON.stringify({n:r.n,d:r.d,nom:norm(P.nomEcole)})));
+  return '*Demande de renouvellement SSL*\nRéf : '+r.n+'\nÉcole : '+norm(P.nomEcole)+'\nLicence '+(l.exp?(licNow()>=l.exp?'expirée le ':'valable jusqu\'au ')+fmtS(l.exp):'')+'\nMontant : ______\nID de transaction : ______\nSSLREN:'+j;
+}
+function renPanel(closable){
+  modal('<div class="card" style="max-width:440px;width:100%;max-height:93vh;overflow:auto"><h3 class="font-bold text-lg" id="rn-t"></h3><p class="text-sm text-slate-700 mt-1" id="rn-d"></p>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-emerald-50 text-sm"><b>1. Demandez le renouvellement</b><div class="text-xs text-slate-600">Réglez le paiement convenu au '+H(TEL)+' (Wave / Orange Money), puis envoyez la demande.</div><div class="flex flex-wrap gap-2 mt-1"><button class="btn g" id="rn-wa">Envoyer sur WhatsApp</button><button class="btn l" id="rn-cp">Copier la demande</button></div></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-blue-50 text-sm"><b>2. Collez le code reçu</b><textarea id="rn-code" class="inp" rows="3" placeholder="SSL1.…" style="font-family:monospace;font-size:11px"></textarea><button class="btn mt-1" style="background:#2563eb" id="rn-ok">Valider le renouvellement</button><div id="rn-msg" class="text-xs mt-1"></div></div>'+
+  '<div id="rn-fxbox" style="display:none" class="mt-2"><input id="rn-fxi" type="password" class="inp" placeholder="Code fournisseur" autocomplete="off"><button class="btn l mt-1" id="rn-fxok">Ouvrir</button> <span id="rn-fxm" class="text-xs text-red-600"></span></div>'+
+  '<div class="flex flex-wrap gap-2 justify-between mt-3"><button class="btn l" id="rn-bk">💾 Sauvegarder mes données</button><button class="btn l" id="rn-fx">Accès fournisseur</button>'+(closable?'<button class="btn l" id="rn-cl">Fermer</button>':'')+'</div></div>');
+  const l=licRead();E('rn-t').textContent=closable?'Renouveler la licence':'⛔ Licence expirée';
+  E('rn-d').textContent=l.exp?(licNow()>=l.exp?'Votre période d\'utilisation s\'est terminée le '+fmtS(l.exp)+'. Vos données sont conservées.':'Votre licence est valable jusqu\'au '+fmtS(l.exp)+'.'):'';
+  E('rn-wa').onclick=()=>window.open('https://wa.me/'+WA+'?text='+encodeURIComponent(renMsg()),'_blank');
+  E('rn-cp').onclick=async()=>{toast(await copy(renMsg())?'Demande copiée.':'Copie impossible.')};
+  E('rn-ok').onclick=async()=>{const m=E('rn-msg');m.textContent='Vérification…';const r=await activateRen(E('rn-code').value);if(r.err){m.innerHTML='<span class="text-red-600">'+H(r.err)+'</span>';return}m.innerHTML='<span class="text-emerald-700">✔ Licence renouvelée jusqu\'au '+fmtS(r.exp)+'.</span>';setTimeout(()=>{closeM();licCheck()},900)};
+  E('rn-bk').onclick=()=>{if(typeof exportData==='function')exportData()};
+  E('rn-fx').onclick=()=>{const b=E('rn-fxbox');b.style.display='block';E('rn-fxi').focus()};
+  E('rn-fxok').onclick=async()=>{const v=E('rn-fxi').value;E('rn-fxi').value='';if(await magicOK(v))openMagic();else E('rn-fxm').textContent='Code incorrect.'};
+  const cl=E('rn-cl');if(cl)cl.onclick=closeM;
+  const md=E('pm-modal');if(md&&!closable)md.style.zIndex='100000';
+}
+let lockShown=false;
+function licCheck(){
+  const l=licRead(),bar=E('lic-bar');
+  if(!l.exp){if(bar)bar.remove();if(lockShown){closeM();lockShown=false}return}
+  const n=licNow(),left=l.exp-n;
+  if(left<=0){if(bar)bar.remove();if(!lockShown||!E('pm-modal')){lockShown=true;renPanel(false)}return}
+  if(lockShown){lockShown=false;closeM()}
+  if(left<15*86400){
+    const t='⏳ Licence : il reste '+Math.ceil(left/86400)+' jour(s)';
+    if(!bar)document.body.insertAdjacentHTML('beforeend','<div id="lic-bar" class="no-print" style="position:fixed;left:8px;right:8px;top:8px;z-index:9000;background:#f59e0b;color:#1c1917;border-radius:10px;padding:6px 10px;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:8px"><span id="lic-t"></span><button id="lic-b" style="background:#1c1917;color:#fff;border:0;border-radius:8px;padding:4px 8px;font-weight:700">Renouveler</button></div>');
+    E('lic-t').textContent=t;E('lic-b').onclick=()=>renPanel(true);
+  }else if(bar)bar.remove();
+}
+function licTick(){const l=licRead(),n=Date.now()/1000;if(l.exp&&n>(l.max||0)+30){l.max=n;licWrite(l)}licCheck()}
+setInterval(licTick,60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)licTick()});
+window.addEventListener('load',()=>setTimeout(licTick,600));
+
 window.sslPay={open:gate};
 window.addEventListener('load',()=>setTimeout(()=>{install();enforce()},900));
 document.addEventListener('click',e=>{if(e.target&&e.target.closest&&e.target.closest('#nav-params,[onclick*="params"]'))setTimeout(install,200)},true);
