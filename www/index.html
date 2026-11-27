@@ -131,7 +131,7 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                 </button>
                 <button onclick="switchTab('eleves')" id="nav-eleves" class="nav-btn w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors hover:bg-slate-800 hover:text-white">
                     <i class="fa-solid fa-user-graduate w-5 text-center"></i>
-                    <span>2. Base Élèves (<span id="count-eleves-badge">150</span>)</span>
+                    <span>2. Base Élèves (<span id="count-eleves-badge">0</span>)</span>
                 </button>
                 <button onclick="switchTab('enseignants')" id="nav-enseignants" class="nav-btn w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors hover:bg-slate-800 hover:text-white">
                     <i class="fa-solid fa-chalkboard-user w-5 text-center"></i>
@@ -376,7 +376,7 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
             <section id="tab-eleves" class="tab-content hidden max-w-6xl mx-auto space-y-6">
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 gap-4 no-print">
                     <div>
-                        <h2 class="text-2xl font-bold text-slate-900">Base de Données des Élèves (150 Élèves Prévus)</h2>
+                        <h2 class="text-2xl font-bold text-slate-900">Base de Données des Élèves</h2>
                         <p class="text-sm text-slate-500">Gestion, impression et export PDF de la liste des élèves par classe.</p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -909,11 +909,8 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                 fluxOption: "Mono flux",
                 classesList: ["CI", "CP", "CE1", "CE2", "CM1", "CM2"]
             },
-            eleves: generate150Eleves(),
-            enseignants: [
-                { id: "101", prenom: "Pathé", nom: "Diallo", sexe: "M", matricule: "604552/F", grade: "Instituteur Titulaire", dob: "1988-05-12", pob: "Saint-Louis", tel: "775001122", adresse: "Quartier Artillerie", dateEntree: "2014-10-01" },
-                { id: "102", prenom: "Aminata", nom: "Faye", sexe: "F", matricule: "612890/A", grade: "Institutrice Titulaire", dob: "1992-08-24", pob: "Dakar", tel: "776443322", adresse: "Quartier Escale", dateEntree: "2018-10-01" }
-            ],
+            eleves: [],
+            enseignants: [],
             subjects: JSON.parse(JSON.stringify(DEFAULT_SUBJECTS)),
             notes: {},
             media: {
@@ -953,7 +950,14 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                     const parsed = JSON.parse(saved);
                     appState = { ...appState, ...parsed, isUnlocked: false };
                     if (!Array.isArray(appState.eleves)) {
-                        appState.eleves = generate150Eleves();
+                        appState.eleves = [];
+                    }
+                    /* nettoyage unique : retire les 150 élèves et 2 enseignants d'exemple restés en mémoire (les vraies données ne sont pas touchées) */
+                    {
+                        const n0 = appState.eleves.length + (Array.isArray(appState.enseignants) ? appState.enseignants.length : 0);
+                        appState.eleves = appState.eleves.filter(e => !(/^\d+$/.test(String(e.id)) && +e.id >= 1 && +e.id <= 150 && String(e.tel) === '77' + (1000000 + (+e.id) * 357)));
+                        if (Array.isArray(appState.enseignants)) appState.enseignants = appState.enseignants.filter(t => !((String(t.id) === '101' && t.matricule === '604552/F') || (String(t.id) === '102' && t.matricule === '612890/A')));
+                        if (appState.eleves.length + (Array.isArray(appState.enseignants) ? appState.enseignants.length : 0) !== n0) { try { localStorage.setItem('senegal_school_app_state', JSON.stringify({ ...appState, isUnlocked: false })); } catch(e2) {} }
                     }
                     if (!Array.isArray(appState.subjects) || !appState.subjects.length) {
                         appState.subjects = DEFAULT_SUBJECTS;
@@ -4972,6 +4976,245 @@ function build(){
 }
 build();
 window.addEventListener('load',()=>setTimeout(paint,300));
+})();
+</script>
+<script id="ssl-lang">
+(function(){
+"use strict";
+var K="ssl_lang_v1",L=["fr","ar","wo","se","jo","ma","pe"],N={fr:"Français",ar:"العربية",wo:"Wolof",se:"Sérère (Seereer)",jo:"Jola (Joola)",ma:"Mandingue (Mandinka)",pe:"Peul (Pulaar)"},EL="";
+var B=`accueil|الرئيسية|Dalal
+paramètres|الإعدادات|Tànnéef yi
+paramètres généraux de l'établissement|الإعدادات العامة للمؤسسة|Tànnéef yu mag yi ci lekkol bi
+base élèves|قاعدة التلاميذ|Baaz bu taalibe yi
+enseignants|المعلمون|Njàngalekat yi
+enseignant|المعلم|Njàngalekat
+nouveau professeur|معلم جديد|Njàngalekat bu bees
+matières & notes|المواد والنقاط|Matiyeer ak not yi
+bulletins de notes|كشوف النقاط|Bilte not yi
+bulletins|كشوف النقاط|Bilte yi
+statistiques|الإحصائيات|Statistik yi
+prop. de passage|مقترحات الانتقال|Wéetu klaas
+gestion financière|التسيير المالي|Yoonu xaalis
+essai école|تجربة المدرسة|Ceet lekkol
+essai codec|تجربة كوديك|Ceet CODEC
+transfert tél ⇄ pc|نقل هاتف ⇄ حاسوب|Yóbbu Telefon ⇄ PC
+menu principal|القائمة الرئيسية|Menu bu mag bi
+classe|القسم|Klaas
+classes|الأقسام|Klaas yi
+élève|التلميذ|Taalibe
+élèves|التلاميذ|Taalibe yi
+matricule|رقم التسجيل|Nimero matrikul
+nom|اللقب|Sant
+prénom|الاسم|Tur
+prénoms|الأسماء|Tur yi
+prénom & nom|الاسم واللقب|Tur ak sant
+prénoms & noms|الأسماء والألقاب|Tur ak sant yi
+sexe|الجنس|Sekse
+masculin|ذكر|Góor
+féminin|أنثى|Jigéen
+date|التاريخ|Bés
+date de naissance|تاريخ الميلاد|Bésu juddu
+lieu de naissance|مكان الميلاد|Barabu juddu
+date naiss.|تاريخ الميلاد|Bésu juddu
+lieu naiss.|مكان الميلاد|Barabu juddu
+adresse|العنوان|Adrees
+téléphone|الهاتف|Telefon
+père|الأب|Baay
+mère|الأم|Yaay
+le parent|ولي الأمر|Waajur bi
+effectif|العدد|Limu
+actions|الإجراءات|Jëf yi
+enregistrer|حفظ|Denc
+annuler|إلغاء|Bàyyi
+fermer|إغلاق|Tëj
+ajouter|إضافة|Yokk
+ajouter un élève|إضافة تلميذ|Yokk taalibe
+supprimer|حذف|Far
+modifier|تعديل|Soppi
+retirer|إزالة|Dindi
+imprimer|طباعة|Imprime
+imprimer / pdf|طباعة / PDF|Imprime / PDF
+imprimer tous les bulletins|طباعة جميع الكشوف|Imprime bilte yépp
+envoyer|إرسال|Yónnee
+ouvrir|فتح|Ubbi
+valider et continuer|تأكيد ومتابعة|Dëggal te kontinué
+retour|رجوع|Dellu
+sauvegarder|نسخ احتياطي|Denc
+restaurer|استعادة|Delloo
+oui|نعم|Waaw
+non|لا|Déedéet
+total|المجموع|Total
+moyenne|المعدل|Moyen
+rang|الرتبة|Rang
+note|النقطة|Not
+notes|النقاط|Not yi
+matière|المادة|Matiyeer
+mois|الشهر|Weer
+trimestre|الفصل|Trimestre
+trimestre 1|الفصل الأول|Trimestre 1
+trimestre 2|الفصل الثاني|Trimestre 2
+trimestre 3|الفصل الثالث|Trimestre 3
+trimestre 01|الفصل الأول|Trimestre 1
+trimestre 02|الفصل الثاني|Trimestre 2
+trimestre 03|الفصل الثالث|Trimestre 3
+année scolaire|السنة الدراسية|At mu njàng mi
+nom de l'école / établissement|اسم المدرسة / المؤسسة|Tur lekkol bi
+type d'école|نوع المدرسة|Xeetu lekkol
+école|المدرسة|Lekkol
+grade|الرتبة الوظيفية|Grade
+mode de paiement|طريقة الدفع|Naka lañu fay
+montant|المبلغ|Xaalis bi
+reçu|وصل|Récu
+inscription|التسجيل|Bindu
+mensualité|القسط الشهري|Fay weer wi
+reste|المتبقي|Des
+solde|الرصيد|Solde
+dépenses|المصروفات|Dëppoo
+absences|الغيابات|Ñàkk yi
+observations|الملاحظات|Xalaat yi
+décision|القرار|Dogal
+décision du conseil|قرار المجلس|Dogalu ndaje mi
+résultats|النتائج|Résulta yi
+liste nominative|القائمة الاسمية|Limu tur yi
+saisie de notes|إدخال النقاط|Bind not yi
+outils administratifs|أدوات إدارية|Jumtukaayu yoon
+whatsapp|واتساب|WhatsApp
+logo|الشعار|Logo
+cachet|الختم|Kaset
+photo|الصورة|Foto
+république du sénégal|جمهورية السنغال|Réewum Senegaal
+un peuple - un but - une foi|شعب واحد - هدف واحد - إيمان واحد|Benn Ñoñ - Benn Yéene - Benn Ngëm
+ministère de l'éducation nationale|وزارة التربية الوطنية|Ministeru Njàng mu Réew mi
+ministere de l'education nationale|وزارة التربية الوطنية|Ministeru Njàng mu Réew mi
+la rénovation digitale|التجديد الرقمي|Yeesalug dijitaal
+mode restreint|وضع مقيّد|Mod bu tëj
+ont composé|المشاركون|Ñi ko def
+ont réussi|الناجحون|Ñi ndam
+taux|النسبة|Pursantaas
+taux de réussite|نسبة النجاح|Pursantaas bu ndam
+heures perdues|الساعات الضائعة|Waxtu yu ñàkk`;
+var D={};B.split("\n").forEach(function(l){var p=l.split("|");if(p.length>2)D[p[0]]={ar:p[1],wo:p[2]}});
+var S={sel:["fr"],ed:{},rtl:true},M={},R=[];
+try{var j=JSON.parse(localStorage.getItem(K)||"null");if(j&&j.sel&&j.sel.length)S=Object.assign(S,j)}catch(e){}
+function sv(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}}
+function $(i){return document.getElementById(i)}
+function h(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;")}
+function nk(s){return s.replace(/[’‘]/g,"'").replace(/\s+/g," ").trim().toLowerCase()}
+function gt(k,l){var e=S.ed[k];return(e&&e[l])||(D[k]&&D[k][l])||""}
+var RX=/^([^A-Za-zÀ-ÿ\u0600-\u06FF]*)([\s\S]*?)([\s:*…(]*)$/;
+function tr(t){
+  if(!EL&&S.sel.length===1&&S.sel[0]==="fr")return t;
+  var m=RX.exec(t);if(!m||!m[2])return t;
+  var c=m[2],k=nk(c),o=[],f=false,miss=false;
+  L.forEach(function(l){
+    if(S.sel.indexOf(l)<0)return;
+    if(l==="fr"){o.push(c);return}
+    var v=gt(k,l);
+    if(v){f=true;o.push(l!=="ar"&&c===c.toUpperCase()?v.toUpperCase():v)}else miss=true;
+  });
+  if((miss||(EL&&!gt(k,EL)))&&k.length<70&&/[a-zà-ÿ]/.test(k))M[k]=c;
+  return f?m[1]+o.join(" / ")+m[3]:t;
+}
+var NS=new WeakMap(),AS=new WeakMap(),AT=["placeholder","title","aria-label"],LET=/[A-Za-zÀ-ÿ]/;
+function pt(n){
+  var p=n.parentNode;if(!p)return;
+  var t=p.nodeName;
+  if(t==="SCRIPT"||t==="STYLE"||t==="TEXTAREA"||t==="OPTION"||t==="NOSCRIPT")return;
+  if(p.closest&&p.closest("#ssl-lang-card,[data-i18n-off],[contenteditable=true]"))return;
+  var r=NS.get(n),d=n.data,o=(r&&r.w===d)?r.o:d;
+  if(!LET.test(o))return;
+  var w=tr(o);
+  if(w!==o||r){NS.set(n,{o:o,w:w});if(d!==w)n.data=w}
+}
+function pa(e){
+  if(e.closest&&e.closest("#ssl-lang-card,[data-i18n-off]"))return;
+  AT.forEach(function(a){
+    var v=e.getAttribute(a);if(v==null)return;
+    var m=AS.get(e)||{},r=m[a],o=(r&&r.w===v)?r.o:v;
+    if(!LET.test(o))return;
+    var w=tr(o);
+    if(w!==o||r){m[a]={o:o,w:w};AS.set(e,m);if(v!==w)e.setAttribute(a,w)}
+  });
+}
+function walk(root){
+  if(root.nodeType===3){pt(root);return}
+  if(root.nodeType!==1)return;
+  pa(root);
+  var tw=document.createTreeWalker(root,5),n;
+  while((n=tw.nextNode())){if(n.nodeType===3)pt(n);else pa(n)}
+}
+var ob=new MutationObserver(function(ms){
+  ms.forEach(function(m){
+    if(m.type==="characterData")pt(m.target);
+    else if(m.type==="attributes")pa(m.target);
+    else m.addedNodes.forEach(walk);
+  });
+});
+function on(){ob.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:AT})}
+function sd(){
+  var one=S.sel.length===1,ar=one&&S.sel[0]==="ar",d=document.documentElement;
+  d.dir=(ar&&S.rtl!==false)?"rtl":"ltr";
+  d.lang=one?({ar:"ar",wo:"wo",se:"srr",jo:"dyo",ma:"mnk",pe:"ff",fr:"fr"})[S.sel[0]]:"fr";
+}
+function ap(){ob.disconnect();walk(document.body);sd();on()}
+
+function rows(){
+  var q=nk(($("sl-q")||{value:""}).value),seen={},ks=[],e=EL||"ar";
+  Object.keys(M).concat(Object.keys(D),Object.keys(S.ed)).forEach(function(k){if(!seen[k]){seen[k]=1;ks.push(k)}});
+  ks=ks.filter(function(k){return!q||k.indexOf(q)>=0||gt(k,e).toLowerCase().indexOf(q)>=0});
+  ks=ks.filter(function(k){return!gt(k,e)}).concat(ks.filter(function(k){return!!gt(k,e)}));
+  R=ks.slice(0,80);
+  $("sl-th").textContent=N[e];
+  $("sl-tb").innerHTML=R.map(function(k,i){
+    return'<tr><td class="p-1 text-xs align-top">'+h(M[k]||k)+(gt(k,e)?"":' <span class="text-amber-600">●</span>')+'</td>'+
+    '<td class="p-1"><input class="inp"'+(e==="ar"?' dir="rtl"':"")+' data-i="'+i+'" data-l="'+e+'" value="'+h(gt(k,e))+'"></td></tr>';
+  }).join("")||'<tr><td class="p-2 text-xs text-slate-500" colspan="2">Aucun mot trouvé.</td></tr>';
+}
+function card(){
+  var c=document.createElement("div");
+  c.id="ssl-lang-card";c.className="no-print rounded-xl border border-sky-300 bg-sky-50 p-4 space-y-3";
+  c.innerHTML='<div class="font-bold text-slate-800">🌐 Langue / اللغة / Lakk</div>'+
+  '<div class="flex flex-wrap gap-4 text-sm">'+L.map(function(l){return'<label class="flex items-center gap-1.5"><input type="checkbox" data-l="'+l+'"> '+N[l]+'</label>'}).join("")+
+  '<label class="flex items-center gap-1.5"><input type="checkbox" id="sl-rtl"> Sens droite→gauche (arabe seul)</label></div>'+
+  '<p class="text-xs text-slate-500">Une seule langue cochée : tout s\'affiche dans cette langue. Plusieurs cochées : affichage combiné (ex. Français / العربية). Un mot sans traduction reste en français.</p>'+
+  '<button type="button" class="btn" id="sl-ed">✏️ Corriger / compléter les traductions</button>'+
+  '<div id="sl-box" style="display:none" class="space-y-2"><label class="lb">Langue à corriger</label><select id="sl-lg" class="inp">'+L.slice(1).map(function(l){return'<option value="'+l+'">'+N[l]+'</option>'}).join("")+'</select><input id="sl-q" class="inp" placeholder="Rechercher un mot…">'+
+  '<p class="text-xs text-slate-500">● = mot rencontré à l\'écran et pas encore traduit. Videz une case pour revenir à la traduction d\'origine. Sérère, Jola, Mandingue et Peul : aucun mot n\'est fourni, à compléter ici.</p>'+
+  '<div class="overflow-x-auto" style="max-height:340px;overflow-y:auto"><table class="w-full text-sm"><thead><tr><th class="p-1 text-left">Français</th><th class="p-1 text-left" id="sl-th"></th></tr></thead><tbody id="sl-tb"></tbody></table></div>'+
+  '<textarea id="sl-js" class="inp" rows="3" placeholder="Export / import de vos corrections (copier-coller)"></textarea>'+
+  '<div class="flex flex-wrap gap-2"><button type="button" class="btn" id="sl-ex">Exporter mes corrections</button><button type="button" class="btn" id="sl-im">Importer</button><button type="button" class="btn" id="sl-rs">Effacer mes corrections</button></div></div>';
+  c.addEventListener("change",function(e){
+    var t=e.target,l=t.getAttribute("data-l");
+    if(t.type==="checkbox"&&l){
+      var s=[];L.forEach(function(x){var b=c.querySelector('input[data-l="'+x+'"]');if(b&&b.checked)s.push(x)});
+      S.sel=s.length?s:["fr"];sv();sy();ap();
+    }else if(t.id==="sl-lg"){EL=t.value;ap();rows()}else if(t.id==="sl-rtl"){S.rtl=t.checked;sv();sd()}
+    else if(t.hasAttribute("data-i")){
+      var k=R[+t.getAttribute("data-i")],v=t.value.trim();
+      S.ed[k]=S.ed[k]||{};if(v)S.ed[k][l]=v;else delete S.ed[k][l];
+      sv();ap();
+    }
+  });
+  c.addEventListener("input",function(e){if(e.target.id==="sl-q")rows()});
+  c.addEventListener("click",function(e){
+    var id=e.target.id,b=$("sl-box");
+    if(id==="sl-ed"){var o=b.style.display==="none";b.style.display=o?"block":"none";if(o){var f=S.sel.filter(function(x){return x!=="fr"})[0]||"wo";EL=f;$("sl-lg").value=f;ap();rows()}else{EL="";ap()}}
+    else if(id==="sl-ex")$("sl-js").value=JSON.stringify(S.ed);
+    else if(id==="sl-im"){try{var x=JSON.parse($("sl-js").value);Object.keys(x).forEach(function(k){S.ed[k]=Object.assign(S.ed[k]||{},x[k])});sv();ap();rows();alert("Corrections importées.")}catch(er){alert("Texte invalide.")}}
+    else if(id==="sl-rs"&&confirm("Effacer toutes vos corrections de traduction ?")){S.ed={};sv();ap();rows()}
+  });
+  return c;
+}
+function sy(){
+  var c=$("ssl-lang-card");if(!c)return;
+  L.forEach(function(l){c.querySelector('input[data-l="'+l+'"]').checked=S.sel.indexOf(l)>=0});
+  $("sl-rtl").checked=S.rtl!==false;
+}
+function ins(){
+  var t=$("tab-params");if(!t||$("ssl-lang-card"))return;
+  t.insertBefore(card(),t.children[1]||null);sy();
+}
+ins();ap();setInterval(ins,2000);
 })();
 </script>
 </body>
