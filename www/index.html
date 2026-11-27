@@ -90,8 +90,8 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                         <i class="fa-solid fa-graduation-cap"></i>
                     </div>
                     <div>
-                        <h1 id="header-school-name" class="font-bold text-base sm:text-lg leading-tight truncate max-w-[200px] sm:max-w-xs md:max-w-md">ÉCOLE ÉLÉMENTAIRE NDALARLOU</h1>
-                        <p id="header-ia-ief" class="text-xs text-slate-400">IA LOUGA | IEF LOUGA 2</p>
+                        <h1 id="header-school-name" class="font-bold text-base sm:text-lg leading-tight truncate max-w-[200px] sm:max-w-xs md:max-w-md">Version démo</h1>
+                        <p id="header-ia-ief" class="text-xs text-slate-400">IA Version démo | IEF Version démo</p>
                     </div>
                 </div>
 
@@ -305,7 +305,7 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                         <!-- Nom de l'École -->
                         <div>
                             <label class="block text-sm font-semibold text-slate-700 mb-1">Nom de l'école / Établissement</label>
-                            <input type="text" id="param-nom-ecole" disabled required value="ÉCOLE ÉLÉMENTAIRE NDALARLOU" class="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-emerald-500">
+                            <input type="text" id="param-nom-ecole" disabled required value="Version démo" class="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-emerald-500">
                         </div>
 
                         <!-- Autorisation & Téléphone -->
@@ -336,7 +336,7 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
                         <!-- Année scolaire & Moyenne de passage -->
                         <div>
                             <label class="block text-sm font-semibold text-slate-700 mb-1">Année Scolaire</label>
-                            <input type="text" id="param-annee-scolaire" disabled required value="2026 - 2027" class="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-emerald-500">
+                            <input type="text" id="param-annee-scolaire" disabled required value="Version démo" class="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-emerald-500">
                         </div>
 
 
@@ -895,15 +895,15 @@ window.prompt=function(m,d){var r=a.promptSync(String(m==null?'':m),d==null?'':S
         let appState = {
             isUnlocked: false,
             params: {
-                ia: "LOUGA",
-                ief: "LOUGA2",
+                ia: "Version démo",
+                ief: "Version démo",
                 typeEcole: "ÉCOLE ÉLÉMENTAIRE",
-                nomEcole: "ÉCOLE ÉLÉMENTAIRE NDALARLOU",
+                nomEcole: "Version démo",
                 numAutorisation: "AUT/2026-0042",
                 telEcole: "+221 33 967 12 34",
                 nomDirecteur: "CHEIKH ASSANE SOW",
                 sexeDirecteur: "M",
-                anneeScolaire: "2026 - 2027",
+                anneeScolaire: "Version démo",
                 moyennePassage: 5.0,
                 nbClasses: 6,
                 fluxOption: "Mono flux",
@@ -4459,6 +4459,8 @@ const fmtD=t=>{try{return new Date(t*1000).toLocaleDateString('fr-FR')}catch(e){
 /* ---- vérification de la signature (clé publique du fournisseur) ---- */
 let PK=null;
 async function pubKey(){if(!PK)PK=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:PUB.x,y:PUB.y,ext:true},{name:'ECDSA',namedCurve:'P-256'},false,['verify']);return PK}
+const PUBL={x:'9NEPChrUlmzvTHjVjRRC4CA9r8yWXkYNfqPTFc51OpY',y:'LMFWJrDPga96L-jXdkAkjV_JlHGk9pmzDj7EbQuCMKM'};let PKL=null;
+async function pubKeyL(){if(!PKL)PKL=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:PUBL.x,y:PUBL.y,ext:true},{name:'ECDSA',namedCurve:'P-256'},false,['verify']);return PKL}
 function findToken(text){
   const t=String(text||''),re=/SSL1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
   let m=re.exec(t);if(m)return m[0];
@@ -4467,6 +4469,14 @@ function findToken(text){
 async function verifyToken(tok,kind){
   try{
     if(!hasCrypto()||!tok)return null;
+    const ml=/^LIC1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(tok).trim());
+    if(ml){
+      if(kind==='REN')return null;
+      if(!await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},await pubKeyL(),b64d(ml[2]),new TextEncoder().encode('LIC1.'+ml[1])))return null;
+      const q=JSON.parse(new TextDecoder().decode(b64d(ml[1])));
+      if(q.v!==1||!q.n||!q.d||!q.t||!q.ia||!q.ief||!q.nom||!q.an)return null;
+      return q;
+    }
     const m=/^SSL1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(tok).trim());if(!m)return null;
     const ok=await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},await pubKey(),b64d(m[2]),new TextEncoder().encode('SSL1.'+m[1]));
     if(!ok)return null;
@@ -4488,6 +4498,11 @@ const failReset=()=>LS.del(K_FAIL);
 
 /* ---- activation du code ---- */
 async function activate(text){
+  if(/LIC1\./.test(String(text||'').replace(/\s+/g,''))&&window.licActivate){
+    const r0=await window.licActivate(text);if(r0.err)return r0;
+    const P0=(typeof appState!=='undefined'&&appState.params)||{};
+    return{ok:true,p:{nom:P0.nomEcole||'',ief:P0.ief||'',an:P0.anneeScolaire||''}};
+  }
   if(!hasCrypto())return{err:"Cette fonction n'est pas disponible sur ce système."};
   const w=failLeft();if(w>0)return{err:'Trop de tentatives. Réessayez dans '+w+' seconde(s).'};
   const tok=findToken(text);
@@ -4537,7 +4552,7 @@ if(typeof _save0==='function'){
   window.saveStateToStorage=function(){
     try{
       if(appState.isUnlocked&&appState.params&&appState.params.idSeal){
-        const m=/^SSL1\.([^.]+)\./.exec(appState.params.idSeal);
+        const m=/^(?:SSL1|LIC1)\.([^.]+)\./.exec(appState.params.idSeal);
         if(m){const p=JSON.parse(new TextDecoder().decode(b64d(m[1])));if(!sameId(appState.params,p)){delete appState.params.idSeal;LS.del(K_SEAL)}}
       }
     }catch(e){}
@@ -4555,6 +4570,7 @@ async function copy(t){try{await navigator.clipboard.writeText(t);return true}ca
 
 /* message de blocage */
 function gate(){
+  if(!(LS.get(K_SEAL)||((typeof appState!=='undefined'&&appState.params)||{}).idSeal)&&window.licPanel){window.licPanel(false,"Version de démonstration : renseignez les informations de l'école, envoyez la demande d'activation, puis collez le code reçu.");return}
   modal('<div class="card" style="max-width:420px;width:100%"><h3 class="font-bold text-lg mb-2">🔒 Modification protégée</h3><p class="text-sm text-slate-700">Veuillez vous connecter sur Internet pour effectuer le paiement ('+PRICE+' par Wave ou Orange Money) afin de pouvoir modifier l\'IA, l\'IEF, le nom de l\'école et l\'année scolaire.</p><p class="text-xs text-slate-500 mt-2">Cette configuration ne se fait qu\'une seule fois : ensuite, ces champs sont verrouillés.</p><div class="flex flex-wrap gap-2 justify-end mt-4"><button class="btn l" id="pm-no">Annuler</button><button class="btn a" id="pm-have">J\'ai déjà un code</button><button class="btn g" id="pm-yes">Continuer</button></div></div>');
   E('pm-no').onclick=closeM;E('pm-yes').onclick=()=>openForm(false);E('pm-have').onclick=()=>openForm(true);
 }
@@ -4790,33 +4806,74 @@ window.licActivate=async function(text){
   if(l.acu.indexOf(p.n)>=0)return{err:"Ce code a déjà été utilisé : il ne sert qu'une seule fois."};
   if(now-p.t>45*DAY)return{err:'Ce code a expiré. Refaites une demande.'};
   if(p.t-now>2*DAY)return{err:"La date de cet appareil est incorrecte. Corrigez la date et l'heure."};
+  /* identité de l'école portée par le code : appliquée une seule fois, puis verrouillée */
+  let idDone=false,idBefore=null,sealBefore=null;
+  try{
+    if(p.ia&&p.ief&&p.nom&&p.an&&typeof appState!=='undefined'&&appState.params&&window.sslIdent){
+      let sealed=false;
+      for(const tk of [LS.g('ssl_idseal'),appState.params.idSeal]){if(tk&&await window.sslIdent.verify(tk)){sealed=true;break}}
+      if(!sealed){
+        idBefore=JSON.stringify(appState.params);sealBefore=LS.g('ssl_idseal');
+        const PP=appState.params;PP.ia=p.ia;PP.ief=p.ief;PP.nomEcole=p.nom;PP.anneeScolaire=p.an;PP.idSeal=m[0];
+        appState.isUnlocked=false;
+        if(!LS.s('senegal_school_app_state',JSON.stringify(Object.assign({},appState,{isUnlocked:false})))){appState.params=JSON.parse(idBefore);return{err:"Mémoire de l'appareil pleine : rien n'a été modifié."}}
+        LS.s('ssl_idseal',m[0]);idDone=true;
+      }
+    }
+  }catch(e){}
   l.exp=Math.max(now,l.max||0,l.exp||0)+p.days*DAY;l.act=1;l.max=Math.max(l.max||0,now);
   l.acu.push(p.n);l.acu=l.acu.slice(-30);
-  if(!licWrite(l))return{err:"Mémoire pleine : impossible d'activer."};
+  if(!licWrite(l)){
+    if(idDone){try{appState.params=JSON.parse(idBefore);LS.s('senegal_school_app_state',JSON.stringify(Object.assign({},appState,{isUnlocked:false})));if(sealBefore)LS.s('ssl_idseal',sealBefore);else localStorage.removeItem('ssl_idseal')}catch(e){}}
+    return{err:"Mémoire pleine : impossible d'activer."};
+  }
   LS.s('ac_fail','{}');
-  return{ok:true,exp:l.exp};
+  return{ok:true,exp:l.exp,reload:idDone};
 };
 /* ---- fenêtre d'activation ---- */
 let locked=false;
 function modal(html,z){const o=E('ac-modal');if(o)o.remove();document.body.insertAdjacentHTML('beforeend','<div id="ac-modal" class="no-print" style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:'+z+';display:flex;align-items:center;justify-content:center;padding:10px">'+html+'</div>')}
 const closeM=()=>{const o=E('ac-modal');if(o)o.remove()};
 async function copy(t){try{await navigator.clipboard.writeText(t);return true}catch(e){try{const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;left:-999px';document.body.appendChild(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}catch(e2){return false}}}
-const reqMsg=()=>"*Demande d'activation*\nÉcole : "+(school()||'______')+"\nID appareil : "+dev()+"\nMontant : "+PRICE+" (Wave / Orange Money)\nID de transaction : ______";
+const prm=k=>{try{return String(appState.params[k]||'').replace(/_/g,' ').replace(/\s+/g,' ').trim()}catch(e){return ''}};
+const DEMOV='Version démo';
+const sealedNow=()=>{try{return !!(LS.g('ssl_idseal')||(appState.params||{}).idSeal)}catch(e){return false}};
+const IDV=k=>{const v=prm(k);return v===DEMOV?'':v};
+const normAn=v=>{const m=/^\s*(\d{4})\s*[-–\/]\s*(\d{4})\s*$/.exec(v||'');if(!m)return null;const a=+m[1],b=+m[2];if(b!==a+1)return null;return a+' - '+b};
+const cl1=s=>String(s==null?'':s).replace(/_/g,' ').replace(/\s+/g,' ').trim();
+const fval=id=>{const e=E(id);return e?e.value:''};
+function formData(){
+  const ia=cl1(fval('ac-ia')),ief=cl1(fval('ac-ief')),nom=cl1(fval('ac-nom')).toUpperCase(),an=normAn(fval('ac-an'));
+  if(!ia||ia.length>60||ia===DEMOV)return{err:"Renseignez l'Inspection d'Académie (IA)."};
+  if(!ief||ief.length>60||ief===DEMOV)return{err:"Renseignez l'IEF."};
+  if(!nom||nom.length>90||nom===DEMOV.toUpperCase())return{err:"Renseignez le nom de l'école."};
+  if(!an)return{err:"Année scolaire invalide. Exemple : 2026-2027."};
+  return{ia,ief,nom,an};
+}
+const msgFrom=f=>"*Demande d'activation*\nIA : "+f.ia+"\nIEF : "+f.ief+"\nÉcole : "+f.nom+"\nAnnée scolaire : "+f.an+"\nID appareil : "+dev()+"\nMontant : "+PRICE+" (Wave / Orange Money)\nID de transaction : ______";
 function panel(isLocked,why){
+  const RO=sealedNow()?' readonly':'';
   modal('<div class="card" style="max-width:440px;width:100%;max-height:93vh;overflow:auto"><h3 class="font-bold text-lg">'+(isLocked?'⛔ Démo terminée':"🔑 Activer l'application")+'</h3>'+
   '<p class="text-sm text-slate-700 mt-1">'+H(why||('Version de démonstration : '+DEMO_ELEVES+' élèves maximum et '+DEMO_DAYS+' jours.'))+'</p>'+
   '<div class="border rounded-lg p-2 mt-2 bg-slate-50 text-xs">Identifiant de cet appareil :<br><b style="word-break:break-all;font-size:14px">'+H(dev())+'</b></div>'+
-  '<div class="border rounded-lg p-2 mt-2 bg-emerald-50 text-sm"><b>1. Payez la licence annuelle : '+PRICE+'</b><div class="text-xs text-slate-600">Wave ou Orange Money au <b>'+TEL+'</b>. Changement d\'appareil : '+TRF+'.</div><div class="flex flex-wrap gap-2 mt-1"><button class="btn g" id="ac-wa">Envoyer la demande sur WhatsApp</button><button class="btn l" id="ac-cp">Copier la demande</button></div></div>'+
-  '<div class="border rounded-lg p-2 mt-2 bg-blue-50 text-sm"><b>2. Collez le code reçu</b><textarea id="ac-code" class="inp" rows="3" placeholder="LIC1.…" style="font-family:monospace;font-size:11px"></textarea><button class="btn mt-1" style="background:#2563eb" id="ac-ok">Activer</button><div id="ac-msg" class="text-xs mt-1"></div></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-white text-sm"><b>1. Renseignez votre école</b><div class="text-xs text-slate-600 mb-1">Ces informations seront inscrites dans l\'application à l\'activation, puis verrouillées.</div>'+
+  '<label class="lb">Inspection d\'Académie (IA)</label><input id="ac-ia" class="inp" list="dl-ia" autocomplete="off" value="'+H(IDV('ia'))+'"'+RO+'>'+
+  '<label class="lb">IEF</label><input id="ac-ief" class="inp" list="ac-dl-ief" autocomplete="off" value="'+H(IDV('ief'))+'"'+RO+'><datalist id="ac-dl-ief"></datalist>'+
+  '<label class="lb">Nom de l\'école</label><input id="ac-nom" class="inp" autocomplete="off" value="'+H(IDV('nomEcole'))+'"'+RO+'>'+
+  '<label class="lb">Année scolaire</label><input id="ac-an" class="inp" placeholder="2026-2027" inputmode="numeric" autocomplete="off" value="'+H(IDV('anneeScolaire'))+'"'+RO+'></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-emerald-50 text-sm"><b>2. Payez la licence annuelle : '+PRICE+'</b><div class="text-xs text-slate-600">Wave ou Orange Money au <b>'+TEL+'</b>. Changement d\'appareil : '+TRF+'.</div><div class="flex flex-wrap gap-2 mt-1"><button class="btn g" id="ac-wa">Envoyer la demande sur WhatsApp</button><button class="btn l" id="ac-cp">Copier la demande</button></div></div>'+
+  '<div class="border rounded-lg p-2 mt-2 bg-blue-50 text-sm"><b>3. Collez le code reçu</b><textarea id="ac-code" class="inp" rows="3" placeholder="LIC1.…" style="font-family:monospace;font-size:11px"></textarea><button class="btn mt-1" style="background:#2563eb" id="ac-ok">Activer</button><div id="ac-msg" class="text-xs mt-1"></div></div>'+
   '<div class="flex flex-wrap gap-2 justify-between mt-3"><button class="btn l" id="ac-bk">💾 Sauvegarder mes données</button>'+(isLocked?'':'<button class="btn l" id="ac-cl">Fermer</button>')+'</div></div>',isLocked?100000:10020);
-  E('ac-wa').onclick=()=>window.open('https://wa.me/'+WA+'?text='+encodeURIComponent(reqMsg()),'_blank');
-  E('ac-cp').onclick=async()=>{E('ac-msg').textContent=(await copy(reqMsg()))?'Demande copiée.':'Copie impossible.'};
+  E('ac-wa').onclick=()=>{const f=formData();if(f.err){E('ac-msg').innerHTML='<span class="text-red-600">'+H(f.err)+'</span>';return}window.open('https://wa.me/'+WA+'?text='+encodeURIComponent(msgFrom(f)),'_blank')};
+  E('ac-cp').onclick=async()=>{const f=formData();if(f.err){E('ac-msg').innerHTML='<span class="text-red-600">'+H(f.err)+'</span>';return}E('ac-msg').textContent=(await copy(msgFrom(f)))?'Demande copiée.':'Copie impossible.'};
   E('ac-bk').onclick=()=>{if(typeof exportData==='function')exportData()};
   const cl=E('ac-cl');if(cl)cl.onclick=closeM;
+  const setIef=()=>{const dl=E('ac-dl-ief');if(!dl)return;dl.innerHTML='';let map={};try{map=typeof IA_IEF_MAP!=='undefined'?IA_IEF_MAP:{}}catch(e){}const tt=cl1(fval('ac-ia')).toUpperCase();const key=Object.keys(map).find(k=>cl1(k).toUpperCase()===tt);(map[key]||[]).forEach(v=>{const o=document.createElement('option');o.value=v;dl.appendChild(o)})};
+  E('ac-ia').oninput=setIef;setIef();
   E('ac-ok').onclick=async()=>{const m=E('ac-msg');m.textContent='Vérification…';const r=await window.licActivate(E('ac-code').value);
     if(r.err){m.innerHTML='<span class="text-red-600">'+H(r.err)+'</span>';return}
     m.innerHTML='<span class="text-emerald-700">✔ Activé jusqu\'au '+new Date(r.exp*1000).toLocaleDateString('fr-FR')+'.</span>';
-    setTimeout(()=>{locked=false;closeM();check()},900)};
+    setTimeout(()=>{locked=false;closeM();check();if(r.reload)location.reload()},900)};
 }
 function check(){
   try{
@@ -4831,6 +4888,7 @@ function check(){
     E('ac-b').onclick=()=>panel(false);
   }catch(e){}
 }
+window.licPanel=panel;
 const s0=window.saveStateToStorage;
 if(typeof s0==='function')window.saveStateToStorage=function(){const r=s0.apply(this,arguments);setTimeout(check,400);return r};
 setInterval(check,60000);
